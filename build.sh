@@ -13,10 +13,13 @@
 #   catalog    - 编译 openGauss-Catalog（依赖 openGauss + bridge）
 #   delta      - 编译 iceberg_delta（依赖 openGauss + catalog）
 #
+# --force: 全量重编（make clean / cargo clean / rm -rf build 后再编译）
+# 不加时: bridge/fdw/catalog/delta 走增量编译; opengauss 产物存在则跳过
+#
 # 示例:
-#   bash build.sh opengauss --release
-#   bash build.sh fdw --force
-#   bash build.sh bridge
+#   bash build.sh fdw                    # 增量
+#   bash build.sh bridge --release       # release 增量
+#   bash build.sh catalog --force        # 全量重编
 # ============================================================
 set -euo pipefail
 
@@ -32,7 +35,7 @@ for arg in "$@"; do
         --release)   BUILD_MODE=release ;;
         --debug)     BUILD_MODE=debug ;;
         -h|--help)
-            sed -n '2,17p' "$0"
+            sed -n '2,21p' "$0"
             exit 0
             ;;
         *)           TARGET="$arg" ;;
@@ -94,22 +97,6 @@ check_file() {
     fi
 }
 
-need_rebuild() {
-    local label="$1" check_file="$2"
-    shift 2
-    local mode_file="${check_file}.build_mode"
-
-    if [ ! -f "$mode_file" ] || [ "$(cat "$mode_file")" != "$BUILD_MODE" ]; then
-        info "$label — 编译模式不匹配 (${BUILD_MODE})，需要重编"
-        return 0
-    fi
-    if [ -f "$check_file" ] && ! $FORCE_REBUILD; then
-        info "$label 产物已存在 (--force 强制重编)"
-        return 1
-    fi
-    return 0
-}
-
 # ============================================================
 # 环境准备
 # ============================================================
@@ -121,7 +108,6 @@ setup_python_shim() {
 }
 
 setup_rust() {
-    # 安装 rustup（首次）
     if ! command -v rustup >/dev/null 2>&1 && ! command -v ~/.cargo/bin/rustup >/dev/null 2>&1; then
         info "安装 rustup..."
         curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > /tmp/rust-init.sh
@@ -131,7 +117,6 @@ setup_rust() {
         source "$HOME/.cargo/env"
     fi
 
-    # 安装 1.96.0 toolchain
     if ! ~/.cargo/bin/rustc --version 2>/dev/null | grep -q "1.96"; then
         info "安装 Rust 1.96.0 toolchain..."
         export RUSTUP_DIST_SERVER="https://rsproxy.cn"
@@ -140,7 +125,6 @@ setup_rust() {
         ~/.cargo/bin/rustup default 1.96.0
     fi
 
-    # Cargo 镜像
     mkdir -p ~/.cargo
     if ! grep -q "tuna-sparse" ~/.cargo/config.toml 2>/dev/null; then
         cat > ~/.cargo/config.toml << 'TOML'
@@ -158,7 +142,6 @@ TOML
 }
 
 setup_boost_patch() {
-    # 从 binarylibs .a 生成 .so（解决 GCC ABI 不兼容）
     if [ ! -f "$LOCAL_BOOST/libboost_thread.so" ]; then
         info "生成本地 boost .so..."
         ensure_dir "$LOCAL_BOOST"
@@ -171,12 +154,11 @@ setup_boost_patch() {
         done
     fi
 
-    # Patch Makefile + CMakeLists.txt
     patch_boost() {
         local f=$1
         [ ! -f "$f" ] && return
         if [ -f "${f}.bak" ]; then
-            cp "${f}.bak" "$f"  # 恢复原始，避免重复 sed 累积
+            cp "${f}.bak" "$f"
         else
             cp "$f" "${f}.bak"
         fi
@@ -196,8 +178,16 @@ check_binarylibs() {
     info "binarylibs: $(realpath $BINARYLIBS_DIR)"
 }
 
+install_bridge_to_gausshome() {
+    if [ -d "$GAUSSHOME/lib/postgresql" ]; then
+        info "安装 bridge .so 到 GAUSSHOME..."
+        ensure_dir "$GAUSSHOME/lib/postgresql"
+        cp "$BRIDGE_SO" "$GAUSSHOME/lib/postgresql/libiceberg_rust_bridge.so"
+    fi
+}
+
 # ============================================================
-# 编译目标
+# opengauss — 仅全量编译，产物存在且模式匹配则跳过
 # ============================================================
 
 build_opengauss() {
@@ -208,9 +198,14 @@ build_opengauss() {
     setup_python_shim
     setup_boost_patch
 
-    if ! need_rebuild "openGauss" "$GAUSSHOME/bin/gaussdb"; then
+    local mode_file="$GAUSSHOME/bin/gaussdb.build_mode"
+    if ! $FORCE_REBUILD && [ -f "$GAUSSHOME/bin/gaussdb" ] && [ -f "$mode_file" ] && [ "$(cat "$mode_file")" = "$BUILD_MODE" ]; then
+        info "openGauss 产物已存在且模式匹配 (--force 强制重编)"
         "$GAUSSHOME/bin/gsql" --version 2>&1 || warn "gsql 验证失败"
         return 0
+    fi
+    if $FORCE_REBUILD; then
+        info "--force: 强制全量重编"
     fi
 
     source "$ICEBERG_OG_ROOT/opengauss.env" 2>/dev/null || true
@@ -228,11 +223,15 @@ build_opengauss() {
     [ -d "$GAUSSHOME/python" ] && chmod -R u+w "$GAUSSHOME/python" 2>/dev/null || true
 
     make install -j1 2>&1 | tee -a "$HOME/og-build.log"
-    echo "$BUILD_MODE" > "$GAUSSHOME/bin/gaussdb.build_mode"
+    echo "$BUILD_MODE" > "$mode_file"
 
     "$GAUSSHOME/bin/gsql" --version 2>&1 || error "openGauss 编译验证失败"
     info "openGauss 编译完成 — $(ls -lh $GAUSSHOME/bin/gaussdb | awk '{print $5}')"
 }
+
+# ============================================================
+# index — 仅 Rust 语法检查
+# ============================================================
 
 build_index() {
     step "cargo check iceberg-index"
@@ -245,24 +244,21 @@ build_index() {
     info "iceberg-index 检查通过"
 }
 
+# ============================================================
+# bridge — 增量: cargo build ;  --force: cargo clean + cargo build
+# ============================================================
+
 build_bridge() {
     step "编译 iceberg-rust-bridge ($BUILD_MODE 模式)"
+    $FORCE_REBUILD && info "--force: cargo clean + 全量重编"
 
     setup_rust
     check_file "iceberg-index 源码" "$ICEBERG_INDEX_REPO/Cargo.toml"
     check_file "iceberg-rust-bridge 源码" "$ICEBERG_BRIDGE_REPO/Cargo.toml"
 
-    if ! need_rebuild "iceberg-rust-bridge" "$BRIDGE_SO"; then
-        ls -lh "$BRIDGE_SO"
-        install_bridge_to_gausshome
-        return 0
-    fi
-
-    # Rust 不能用 GCC10 libstdc++，清空 LD_LIBRARY_PATH
     export LD_LIBRARY_PATH=
     source "$HOME/.cargo/env"
 
-    # 先检查依赖仓
     info "cargo check iceberg-index (依赖检查)..."
     cd "$ICEBERG_INDEX_REPO"
     cargo check --workspace 2>&1 | tail -3
@@ -271,12 +267,15 @@ build_bridge() {
     [ "$BUILD_MODE" = "release" ] && cargo_flags="--release"
 
     cd "$ICEBERG_BRIDGE_REPO"
+    if $FORCE_REBUILD; then
+        cargo clean 2>&1 | tail -1
+    fi
     cargo build $cargo_flags \
-        --config "patch.\"https://github.com/DataInfraLab/iceberg-index.git\".iceberg-index-abi.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-abi\"" \
-        --config "patch.\"https://github.com/DataInfraLab/iceberg-index.git\".iceberg-index-core.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-core\"" \
-        --config "patch.\"https://github.com/DataInfraLab/iceberg-index.git\".iceberg-index-iceberg.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-iceberg\"" \
-        --config "patch.\"https://github.com/DataInfraLab/iceberg-index.git\".iceberg-index-plugins.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-plugins\"" \
-        --config "patch.\"https://github.com/DataInfraLab/iceberg-index.git\".iceberg-index-runtime.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-runtime\"" \
+        --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-abi.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-abi\"" \
+        --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-core.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-core\"" \
+        --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-iceberg.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-iceberg\"" \
+        --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-plugins.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-plugins\"" \
+        --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-runtime.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-runtime\"" \
         2>&1 | tail -5
 
     echo "$BUILD_MODE" > "${BRIDGE_SO}.build_mode"
@@ -286,16 +285,13 @@ build_bridge() {
     info "bridge 编译完成"
 }
 
-install_bridge_to_gausshome() {
-    if [ -d "$GAUSSHOME/lib/postgresql" ]; then
-        info "安装 bridge .so 到 GAUSSHOME..."
-        ensure_dir "$GAUSSHOME/lib/postgresql"
-        cp "$BRIDGE_SO" "$GAUSSHOME/lib/postgresql/libiceberg_rust_bridge.so"
-    fi
-}
+# ============================================================
+# fdw — 增量: make ;  --force: make clean + make
+# ============================================================
 
 build_fdw() {
     step "编译 iceberg_fdw"
+    $FORCE_REBUILD && info "--force: make clean + 全量重编"
 
     check_file "GAUSSHOME (pg_config)" "$GAUSSHOME/bin/pg_config"
     check_file "iceberg_fdw 源码" "$ICEBERG_FDW_REPO/Makefile"
@@ -304,16 +300,13 @@ build_fdw() {
     export PATH="$OG_SHIM:$GCC_HOME/bin:$GAUSSHOME/bin:/usr/bin:/bin"
     export LD_LIBRARY_PATH="$GCC_HOME/lib64:$GCTOOLS/isl/lib:$GCTOOLS/mpc/lib:$GCTOOLS/mpfr/lib:$GCTOOLS/gmp/lib:$GAUSSHOME/lib:$GAUSSHOME/lib/postgresql:$PYTHON_HOME/lib:$SSL_HOME/lib:/usr/lib64:/lib64"
 
-    if ! need_rebuild "iceberg_fdw" "$GAUSSHOME/lib/postgresql/iceberg_fdw.so"; then
-        info "iceberg_fdw 产物已就绪"
-        return 0
-    fi
-
     ensure_dir "$GAUSSHOME/lib/postgresql/proc_srclib"
     ensure_dir "$GAUSSHOME/share/postgresql/extension"
 
     cd "$ICEBERG_FDW_REPO"
-    make clean 2>/dev/null || true
+    if $FORCE_REBUILD; then
+        make clean 2>/dev/null || true
+    fi
     make PG_CONFIG="$GAUSSHOME/bin/pg_config" \
         OPENGAUSS_SRC_INCLUDE="$OPENGAUSS_REPO/src/include" 2>&1 | tail -5
     make install PG_CONFIG="$GAUSSHOME/bin/pg_config" 2>&1 | tail -3
@@ -327,8 +320,13 @@ build_fdw() {
     info "iceberg_fdw 编译完成"
 }
 
+# ============================================================
+# catalog — 增量: make ;  --force: make clean + make
+# ============================================================
+
 build_catalog() {
     step "编译 openGauss-Catalog"
+    $FORCE_REBUILD && info "--force: make clean + 全量重编"
 
     check_file "GAUSSHOME (pg_config)" "$GAUSSHOME/bin/pg_config"
     check_file "bridge .so" "$BRIDGE_SO"
@@ -339,12 +337,6 @@ build_catalog() {
     export PATH="$OG_SHIM:$GCC_HOME/bin:$GAUSSHOME/bin:/usr/bin:/bin"
     export LD_LIBRARY_PATH="$GCC_HOME/lib64:$GCTOOLS/isl/lib:$GCTOOLS/mpc/lib:$GCTOOLS/mpfr/lib:$GCTOOLS/gmp/lib:$GAUSSHOME/lib:$GAUSSHOME/lib/postgresql:$PYTHON_HOME/lib:$SSL_HOME/lib:/usr/lib64:/lib64"
 
-    if ! need_rebuild "openGauss-Catalog" "$GAUSSHOME/lib/postgresql/iceberg_catalog.so"; then
-        info "iceberg_catalog 产物已就绪"
-        return 0
-    fi
-
-    # 安装 bridge 依赖到 catalog deps/
     ensure_dir "$ICEBERG_CATALOG_REPO/deps"
     cp "$BRIDGE_SO" "$ICEBERG_CATALOG_REPO/deps/libiceberg_rust_bridge.so"
     cp "$BRIDGE_HEADER" "$ICEBERG_CATALOG_REPO/deps/"
@@ -353,7 +345,9 @@ build_catalog() {
     ensure_dir "$GAUSSHOME/share/postgresql/extension"
 
     cd "$ICEBERG_CATALOG_REPO"
-    make clean 2>/dev/null || true
+    if $FORCE_REBUILD; then
+        make clean 2>/dev/null || true
+    fi
     make PG_CONFIG="$GAUSSHOME/bin/pg_config" GAUSS_SRC="$OPENGAUSS_REPO" 2>&1 | tail -5
 
     cp iceberg_catalog.so "$GAUSSHOME/lib/postgresql/iceberg_catalog.so"
@@ -365,6 +359,10 @@ build_catalog() {
     info "iceberg_catalog 编译完成"
 }
 
+# ============================================================
+# delta — 增量: cmake --build ;  --force: rm -rf build + cmake configure + build
+# ============================================================
+
 build_delta() {
     step "编译 iceberg_delta"
 
@@ -372,29 +370,40 @@ build_delta() {
     check_file "catalog header" "$ICEBERG_CATALOG_REPO/src/include/iceberg_catalog.h"
     check_file "iceberg_delta 源码" "$ICEBERG_DELTA_REPO/CMakeLists.txt"
 
-    if ! need_rebuild "iceberg_delta" "$GAUSSHOME/lib/postgresql/iceberg_delta.so"; then
-        info "iceberg_delta 产物已就绪"
-        return 0
-    fi
-
     DELTA_BUILD="$ICEBERG_DELTA_REPO/tmp_build_gcc10"
-    rm -rf "$DELTA_BUILD"
-    ensure_dir "$DELTA_BUILD"
-    cd "$DELTA_BUILD"
+    local configure_needed=false
+
+    if $FORCE_REBUILD; then
+        info "--force: 清理构建目录 + 全量重编"
+        rm -rf "$DELTA_BUILD"
+        configure_needed=true
+    elif [ ! -d "$DELTA_BUILD" ] || [ ! -f "$DELTA_BUILD/CMakeCache.txt" ]; then
+        info "构建目录不存在，需要 cmake configure..."
+        configure_needed=true
+    fi
 
     # cmake 需要系统 libstdc++（避免 GCC ABI 冲突）
     export CC="$GCC_HOME/bin/gcc" CXX="$GCC_HOME/bin/g++"
     export PATH="$GAUSSHOME/bin:$GCC_HOME/bin:/usr/bin:/bin"
     export LD_LIBRARY_PATH="/usr/lib64:/lib64:$GCC_HOME/lib64:$GCTOOLS/isl/lib:$GCTOOLS/mpc/lib:$GCTOOLS/mpfr/lib:$GCTOOLS/gmp/lib:$GAUSSHOME/lib"
 
-    cmake_build_type="Debug"
-    [ "$BUILD_MODE" = "release" ] && cmake_build_type="Release"
+    if $configure_needed; then
+        ensure_dir "$DELTA_BUILD"
+        cd "$DELTA_BUILD"
 
-    cmake "$ICEBERG_DELTA_REPO" \
-        -DCMAKE_BUILD_TYPE="$cmake_build_type" \
-        -DGAUSS_SRC="$OPENGAUSS_REPO" \
-        -DICEBERG_CATALOG_INCLUDE="$ICEBERG_CATALOG_REPO/src/include" 2>&1 | tail -3
-    cmake --build . --parallel "$BUILD_JOBS" 2>&1 | tail -5
+        cmake_build_type="Debug"
+        [ "$BUILD_MODE" = "release" ] && cmake_build_type="Release"
+
+        cmake "$ICEBERG_DELTA_REPO" \
+            -DCMAKE_BUILD_TYPE="$cmake_build_type" \
+            -DGAUSS_SRC="$OPENGAUSS_REPO" \
+            -DICEBERG_CATALOG_INCLUDE="$ICEBERG_CATALOG_REPO/src/include" 2>&1 | tail -3
+        cmake --build . --parallel "$BUILD_JOBS" 2>&1 | tail -5
+    else
+        cd "$DELTA_BUILD"
+        info "cmake --build (增量)..."
+        cmake --build . --parallel "$BUILD_JOBS" 2>&1 | tail -5
+    fi
 
     ensure_dir "$GAUSSHOME/lib/postgresql/proc_srclib"
     ensure_dir "$GAUSSHOME/share/postgresql/extension"
@@ -411,14 +420,6 @@ build_delta() {
 # ============================================================
 # 依赖关系校验
 # ============================================================
-
-declare -A DEPS
-DEPS[opengauss]="binarylibs"
-DEPS[index]=""
-DEPS[bridge]="iceberg-index"
-DEPS[fdw]="openGauss(GAUSSHOME)"
-DEPS[catalog]="openGauss(GAUSSHOME) bridge"
-DEPS[delta]="openGauss(GAUSSHOME) catalog"
 
 check_dep() {
     case "$1" in
@@ -451,9 +452,9 @@ echo ""
 echo -e "${GREEN}============================================${NC}"
 echo -e "${GREEN}  openGauss Iceberg — 单仓编译${NC}"
 echo -e "${GREEN}  目标: ${TARGET}  |  模式: ${BUILD_MODE}${NC}"
+$FORCE_REBUILD && echo -e "${GREEN}  --force: 全量重编${NC}"
 echo -e "${GREEN}============================================${NC}"
 
-# 依赖前置检查（编译 openGauss 本身除外，因为它是基础依赖）
 if [ "$TARGET" != "opengauss" ] && [ "$TARGET" != "index" ]; then
     check_dep "$TARGET"
 fi

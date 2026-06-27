@@ -159,7 +159,7 @@ setup_git_auth() {
 }
 
 clone_repo() {
-    local dir=$1 branch=$2 repo=$3
+    local dir=$1 branch=$2 url=$3
     if [ -d "$ICEBERG_OG_ROOT/$dir/.git" ]; then
         if $SKIP_UPDATE; then
             echo "  [SKIP] $dir"
@@ -176,31 +176,31 @@ clone_repo() {
         fi
         return
     fi
-    echo "  [CLONE] $repo ($branch)"
-    if git clone -b "$branch" "https://github.com/DataInfraLab/${repo}.git" "$ICEBERG_OG_ROOT/$dir" 2>&1; then
+    echo "  [CLONE] $dir ($branch)"
+    if git clone -b "$branch" "$url" "$ICEBERG_OG_ROOT/$dir" 2>&1; then
         :
     else
         error "git clone 失败。请检查:
   1. GITHUB_USER/GITHUB_TOKEN 是否正确（config.env）
   2. GITHUB_USER 是 GitHub 用户名，不是服务器用户名
   3. Token 是否有 public_repo 权限
-  或手动 clone: git clone https://github.com/DataInfraLab/${repo}.git $ICEBERG_OG_ROOT/$dir"
+  或手动 clone: git clone $url $ICEBERG_OG_ROOT/$dir"
     fi
 }
 
 setup_git_auth
 
 REPOS=(
-    "openGauss-server-datainfra:datainfra_dev:openGauss-server-datainfra"
-    "iceberg-index:main:iceberg-index"
-    "iceberg-rust-bridge:main:iceberg-rust-bridge"
-    "iceberg_fdw:main:iceberg_fdw"
-    "openGauss-Catalog:main:openGauss-Catalog"
-    "iceberg_delta:master:iceberg_delta"
+    "openGauss-server-datainfra:datainfra_dev:$OPENGAUSS_REPO_URL"
+    "iceberg-index:main:$ICEBERG_INDEX_REPO_URL"
+    "iceberg-rust-bridge:main:$ICEBERG_BRIDGE_REPO_URL"
+    "iceberg_fdw:main:$ICEBERG_FDW_REPO_URL"
+    "openGauss-Catalog:main:$ICEBERG_CATALOG_REPO_URL"
+    "iceberg_delta:master:$ICEBERG_DELTA_REPO_URL"
 )
 for entry in "${REPOS[@]}"; do
-    IFS=':' read -r d b r <<< "$entry"
-    clone_repo "$d" "$b" "$r"
+    IFS=':' read -r d b u <<< "$entry"
+    clone_repo "$d" "$b" "$u"
 done
 echo "代码同步完成"
 
@@ -357,11 +357,11 @@ if skip_or_rebuild "iceberg-rust-bridge" "$BRIDGE_SO" "iceberg-rust-bridge" "ice
     [ "$BUILD_MODE" = "release" ] && cargo_flags="--release"
     cd "$ICEBERG_BRIDGE_REPO"
     cargo build $cargo_flags \
-    --config "patch.\"https://github.com/DataInfraLab/iceberg-index.git\".iceberg-index-abi.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-abi\"" \
-    --config "patch.\"https://github.com/DataInfraLab/iceberg-index.git\".iceberg-index-core.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-core\"" \
-    --config "patch.\"https://github.com/DataInfraLab/iceberg-index.git\".iceberg-index-iceberg.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-iceberg\"" \
-    --config "patch.\"https://github.com/DataInfraLab/iceberg-index.git\".iceberg-index-plugins.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-plugins\"" \
-    --config "patch.\"https://github.com/DataInfraLab/iceberg-index.git\".iceberg-index-runtime.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-runtime\"" \
+    --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-abi.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-abi\"" \
+    --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-core.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-core\"" \
+    --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-iceberg.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-iceberg\"" \
+    --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-plugins.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-plugins\"" \
+    --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-runtime.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-runtime\"" \
     2>&1 | tail -3
 
     ls -lh "$BRIDGE_SO"

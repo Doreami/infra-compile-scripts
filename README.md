@@ -28,11 +28,18 @@ git lfs pull
 
 会得到一个token，记得保存下来
 
-# 4. 修改config.env
+# 4. 修改 config.env
 
 ```shell
-GITHUB_USER="你的GitHub用户名"          # 创建这个 token 的 GitHub 账号
-GITHUB_TOKEN="XXX" # token
+# GitHub 认证（必填）
+GITHUB_USER="你的GitHub用户名"
+GITHUB_TOKEN="ghp_xxxx"
+
+# 如需用 fork 仓：
+# 全部 fork → 只改 GITHUB_ORG
+GITHUB_ORG="your_username"
+# 单个 fork → 覆盖对应 _REPO_URL
+# ICEBERG_FDW_REPO_URL="https://github.com/your_fork/iceberg_fdw.git"
 ```
 
 # 5. 执行一键搭建脚本
@@ -44,14 +51,15 @@ GITHUB_TOKEN="XXX" # token
 sh setup.sh
 
 # 可选参数：
---force             # 全量重编
+--force             # 全量重编（make clean / cargo clean 后编译）
 --skip-update       # 不拉代码，只检查产物是否存在
 --debug             # 全链路 debug（默认）
 --release           # 全链路 release
 
 # 说明
-# opengauss仓仅支持全量编译 (通过检查二进制来判断是否要重编)
-# 支持增量的只有 bridge（cargo 自带）、fdw/catalog（make 只重编变动的 .o）、delta（cmake 同理）
+# opengauss 仓仅支持全量编译 (通过检查二进制来判断是否要重编)
+# 其他仓不加 --force 走增量编译（cargo build / make / cmake --build 自带增量检测）
+# 加 --force 会先 clean 再全量编译
 ┌────────────────────────────────┬────────┬──────┐
 │                                │ 拉代码  │ 编译  │
 ├────────────────────────────────┼────────┼──────┤
@@ -73,7 +81,7 @@ sh setup.sh
 bash build.sh <目标> [--release|--debug] [--force]
 
 # 目标:
-#   opengauss  - openGauss 数据库（30-60 分钟，全量）
+#   opengauss  - openGauss 数据库（30-60 分钟，全量；产物存在则跳过）
 #   bridge     - iceberg-rust-bridge（依赖 iceberg-index）
 #   fdw        - iceberg_fdw（依赖 openGauss）
 #   catalog    - openGauss-Catalog（依赖 openGauss + bridge）
@@ -81,10 +89,13 @@ bash build.sh <目标> [--release|--debug] [--force]
 #   index      - cargo check（仅 Rust 语法检查）
 
 # 示例:
-bash build.sh fdw                  # 增量（产物存在则跳过）
+bash build.sh fdw                  # 增量编译
 bash build.sh bridge --release     # release 模式
-bash build.sh catalog --force      # 强制重编
+bash build.sh catalog --force      # make clean + 全量重编
 ```
+
+`bridge`/`fdw`/`catalog`/`delta` 不加 `--force` 走增量编译（构建系统自带增量检测）。  
+加 `--force` 会先 `make clean` / `cargo clean` / `rm -rf build` 再全量编译。
 
 依赖链：`opengauss` → `bridge` → `catalog` → `delta`，`fdw` 只需 `opengauss`。  
 脚本会自动检查前置依赖，缺失时提示先编译上游仓。

@@ -52,8 +52,7 @@ sh setup.sh
 
 # 可选参数：
 --force             # 全量重编（make clean / cargo clean 后编译）
---skip-update       # 不拉代码，只检查产物是否存在
---pull              # 编译前 git pull 各仓最新代码
+--skip-update       # 不拉代码，编译已有产物（选中的仓有产物就跳过）
 --debug             # 全链路 debug（默认）
 --release           # 全链路 release
 

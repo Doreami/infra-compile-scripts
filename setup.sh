@@ -10,12 +10,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FORCE_REBUILD=false
 SKIP_UPDATE=false
-PULL_BEFORE_BUILD=false
 for arg in "$@"; do
     case "$arg" in
         --force) FORCE_REBUILD=true ;;
         --skip-update) SKIP_UPDATE=true ;;
-        --pull) PULL_BEFORE_BUILD=true ;;
         --release) BUILD_MODE=release ;;
         --debug) BUILD_MODE=debug ;;
     esac
@@ -349,13 +347,6 @@ step "7. 编译 iceberg-rust-bridge"
 
 BRIDGE_SO="$ICEBERG_BRIDGE_REPO/target/$([ "$BUILD_MODE" = "release" ] && echo release || echo debug)/libiceberg_rust_bridge.so"
 if skip_or_rebuild "iceberg-rust-bridge" "$BRIDGE_SO" "iceberg-rust-bridge" "iceberg-index"; then
-    if $PULL_BEFORE_BUILD; then
-        echo "  [PULL] iceberg-index ($ICEBERG_INDEX_BRANCH)"
-        (cd "$ICEBERG_INDEX_REPO" && git fetch origin && git checkout "$ICEBERG_INDEX_BRANCH" && git pull origin "$ICEBERG_INDEX_BRANCH") || warn "iceberg-index pull failed"
-        echo "  [PULL] iceberg-rust-bridge ($ICEBERG_BRIDGE_BRANCH)"
-        (cd "$ICEBERG_BRIDGE_REPO" && git fetch origin && git checkout "$ICEBERG_BRIDGE_BRANCH" && git pull origin "$ICEBERG_BRIDGE_BRANCH") || warn "iceberg-rust-bridge pull failed"
-    fi
-
     export LD_LIBRARY_PATH=   # Rust 不能用 GCC10 的 libstdc++
     source "$HOME/.cargo/env"
 
@@ -400,10 +391,6 @@ echo "bridge OK"
 # 8b. iceberg_fdw
 if skip_or_rebuild "iceberg_fdw" "$GAUSSHOME/lib/postgresql/iceberg_fdw.so" "iceberg_fdw" "openGauss-server-datainfra"; then
     echo "building iceberg_fdw..."
-    if $PULL_BEFORE_BUILD; then
-        echo "  [PULL] iceberg_fdw ($ICEBERG_FDW_BRANCH)"
-        (cd "$ICEBERG_FDW_REPO" && git fetch origin && git checkout "$ICEBERG_FDW_BRANCH" && git pull origin "$ICEBERG_FDW_BRANCH") || warn "iceberg_fdw pull failed"
-    fi
     cd "$ICEBERG_FDW_REPO"
     if $FORCE_REBUILD; then
         make clean 2>/dev/null || true
@@ -421,10 +408,6 @@ echo "iceberg_fdw OK"
 # 8c. openGauss-Catalog
 if skip_or_rebuild "iceberg_catalog" "$GAUSSHOME/lib/postgresql/iceberg_catalog.so" "openGauss-Catalog" "iceberg-rust-bridge" "openGauss-server-datainfra"; then
     echo "building openGauss-Catalog..."
-    if $PULL_BEFORE_BUILD; then
-        echo "  [PULL] openGauss-Catalog ($ICEBERG_CATALOG_BRANCH)"
-        (cd "$ICEBERG_CATALOG_REPO" && git fetch origin && git checkout "$ICEBERG_CATALOG_BRANCH" && git pull origin "$ICEBERG_CATALOG_BRANCH") || warn "openGauss-Catalog pull failed"
-    fi
     mkdir -p "$ICEBERG_CATALOG_REPO/deps"
     cp "$BRIDGE_SO" "$ICEBERG_CATALOG_REPO/deps/libiceberg_rust_bridge.so"
     cp "$ICEBERG_BRIDGE_REPO/include/iceberg_bridge.h" "$ICEBERG_CATALOG_REPO/deps/"
@@ -444,10 +427,6 @@ echo "iceberg_catalog OK"
 # 8d. iceberg_delta (cmake)
 if skip_or_rebuild "iceberg_delta" "$GAUSSHOME/lib/postgresql/iceberg_delta.so" "iceberg_delta" "openGauss-server-datainfra" "openGauss-Catalog"; then
     echo "building iceberg_delta..."
-    if $PULL_BEFORE_BUILD; then
-        echo "  [PULL] iceberg_delta ($ICEBERG_DELTA_BRANCH)"
-        (cd "$ICEBERG_DELTA_REPO" && git fetch origin && git checkout "$ICEBERG_DELTA_BRANCH" && git pull origin "$ICEBERG_DELTA_BRANCH") || warn "iceberg_delta pull failed"
-    fi
     DELTA_BUILD="$ICEBERG_DELTA_REPO/tmp_build_gcc10"
     local configure_needed=false
 

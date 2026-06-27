@@ -53,6 +53,7 @@ sh setup.sh
 # 可选参数：
 --force             # 全量重编（make clean / cargo clean 后编译）
 --skip-update       # 不拉代码，只检查产物是否存在
+--pull              # 编译前 git pull 各仓最新代码
 --debug             # 全链路 debug（默认）
 --release           # 全链路 release
 
@@ -78,7 +79,7 @@ sh setup.sh
 首次 `setup.sh` 全量搭建之后，日常开发只需重编改动的仓：
 
 ```shell
-bash build.sh <目标> [--release|--debug] [--force]
+bash build.sh <目标> [--release|--debug] [--force] [--pull]
 
 # 目标:
 #   opengauss  - openGauss 数据库（30-60 分钟，全量；产物存在则跳过）
@@ -92,10 +93,12 @@ bash build.sh <目标> [--release|--debug] [--force]
 bash build.sh fdw                  # 增量编译
 bash build.sh bridge --release     # release 模式
 bash build.sh catalog --force      # make clean + 全量重编
+bash build.sh fdw --pull           # 拉最新代码 + 增量编译
 ```
 
 `bridge`/`fdw`/`catalog`/`delta` 不加 `--force` 走增量编译（构建系统自带增量检测）。  
-加 `--force` 会先 `make clean` / `cargo clean` / `rm -rf build` 再全量编译。
+加 `--force` 会先 `make clean` / `cargo clean` / `rm -rf build` 再全量编译。  
+加 `--pull` 会在编译前 `git pull` 目标仓最新代码（bridge 会同时 pull iceberg-index）。
 
 依赖链：`opengauss` → `bridge` → `catalog` → `delta`，`fdw` 只需 `opengauss`。  
 脚本会自动检查前置依赖，缺失时提示先编译上游仓。

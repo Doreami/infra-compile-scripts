@@ -1,0 +1,13 @@
+# binarylibs — 不在仓库内分发，setup.sh 自动从华为云 OBS 下载
+openGauss-third_party_binarylibs_*.tar.gz
+
+# build artifacts
+tmp_build/
+mppdb_temp_install/
+target/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db

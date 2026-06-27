@@ -112,32 +112,54 @@ fi
 # ============================================================
 # 1. 准备 binarylibs
 # ============================================================
-step "1. 检查 binarylibs"
+step "1. 准备 binarylibs"
 
 if [ ! -d "$BINARYLIBS_DIR/buildtools/gcc10.3" ]; then
-    # 尝试从脚本所在目录的 tar.gz 自动解压
-    TARBALL=$(ls "$SCRIPT_DIR"/openGauss-third_party_binarylibs_*.tar.gz 2>/dev/null | head -1)
-    if [ -n "$TARBALL" ]; then
-        echo "发现 binarylibs 压缩包: $TARBALL"
-        echo "正在解压到 $ICEBERG_OG_ROOT ..."
-        mkdir -p "$ICEBERG_OG_ROOT"
-        cd "$ICEBERG_OG_ROOT"
-        tar xzf "$TARBALL" 2>&1 | tail -1
-        # 解压后目录名可能是 openGauss-third_party_binarylibs_*，重命名为 binarylibs
-        EXTRACTED=$(ls -d openGauss-third_party_binarylibs_* 2>/dev/null | head -1)
-        if [ -n "$EXTRACTED" ] && [ ! -d binarylibs ]; then
-            mv "$EXTRACTED" binarylibs
+    TARBALL="$SCRIPT_DIR/openGauss-third_party_binarylibs_openEuler_x86_64.tar.gz"
+    DOWNLOADED=false
+
+    # 1) 检查脚本所在目录是否有 tar.gz（手动下载或 lfs pull）
+    if [ -f "$TARBALL" ]; then
+        echo "发现本地 binarylibs 压缩包: $TARBALL"
+    else
+        # 2) 自动从华为云 OBS 下载（国内速度快，~1.5GB）
+        echo "binarylibs 不存在，自动下载 (华为云 OBS)..."
+        echo "URL: $BINARYLIBS_DOWNLOAD_URL"
+
+        # 优先 wget（支持断点续传），fallback curl
+        if command -v wget >/dev/null 2>&1; then
+            wget -c "$BINARYLIBS_DOWNLOAD_URL" -O "$TARBALL" 2>&1
+        elif command -v curl >/dev/null 2>&1; then
+            curl -C - -L -o "$TARBALL" "$BINARYLIBS_DOWNLOAD_URL"
+        else
+            error "缺少 wget 或 curl，无法下载 binarylibs。请手动下载后放到: $SCRIPT_DIR/"
         fi
-        echo "解压完成"
+
+        [ -f "$TARBALL" ] || error "binarylibs 下载失败。请检查网络后重试"
+        DOWNLOADED=true
+    fi
+
+    echo "正在解压到 $ICEBERG_OG_ROOT ..."
+    mkdir -p "$ICEBERG_OG_ROOT"
+    cd "$ICEBERG_OG_ROOT"
+    tar xzf "$TARBALL" 2>&1 | tail -1
+    EXTRACTED=$(ls -d openGauss-third_party_binarylibs_* 2>/dev/null | head -1)
+    if [ -n "$EXTRACTED" ] && [ ! -d binarylibs ]; then
+        mv "$EXTRACTED" binarylibs
+    fi
+    echo "解压完成"
+
+    # 若为自动下载，可选择删除 tar.gz 以节省磁盘
+    if $DOWNLOADED; then
+        echo "下载的 tar.gz 保留在: $TARBALL (如需节省磁盘可手动删除)"
     fi
 fi
 
-if [ ! -d "$BINARYLIBS_DIR/buildtools/gcc10.3" ]; then
-    echo ""
-    error "binarylibs 不存在或缺少 gcc10.3 工具链: $BINARYLIBS_DIR
-请下载 openGauss third_party binarylibs 并解压到此目录，或将 tar.gz 放在脚本同级目录。
-下载地址: https://opengauss.org/zh/download/"
-fi
+check_binarylibs() {
+    [ -d "$BINARYLIBS_DIR/buildtools/gcc10.3" ] || \
+        error "binarylibs 不存在或缺少 gcc10.3 工具链: $BINARYLIBS_DIR"
+}
+check_binarylibs
 echo "binarylibs OK: $(realpath $BINARYLIBS_DIR)"
 
 # ============================================================

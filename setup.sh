@@ -213,12 +213,12 @@ clone_repo() {
 setup_git_auth
 
 REPOS=(
-    "openGauss-server-datainfra:datainfra_dev:$OPENGAUSS_REPO_URL"
-    "iceberg-index:main:$ICEBERG_INDEX_REPO_URL"
-    "iceberg-rust-bridge:main:$ICEBERG_BRIDGE_REPO_URL"
-    "iceberg_fdw:main:$ICEBERG_FDW_REPO_URL"
-    "openGauss-Catalog:main:$ICEBERG_CATALOG_REPO_URL"
-    "iceberg_delta:master:$ICEBERG_DELTA_REPO_URL"
+    "openGauss-server-datainfra:$OPENGAUSS_BRANCH:$OPENGAUSS_REPO_URL"
+    "iceberg-index:$ICEBERG_INDEX_BRANCH:$ICEBERG_INDEX_REPO_URL"
+    "iceberg-rust-bridge:$ICEBERG_BRIDGE_BRANCH:$ICEBERG_BRIDGE_REPO_URL"
+    "iceberg_fdw:$ICEBERG_FDW_BRANCH:$ICEBERG_FDW_REPO_URL"
+    "openGauss-Catalog:$ICEBERG_CATALOG_BRANCH:$ICEBERG_CATALOG_REPO_URL"
+    "iceberg_delta:$ICEBERG_DELTA_BRANCH:$ICEBERG_DELTA_REPO_URL"
 )
 for entry in "${REPOS[@]}"; do
     IFS=':' read -r d b u <<< "$entry"

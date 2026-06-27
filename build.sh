@@ -3,7 +3,7 @@
 # openGauss Iceberg — 单仓编译脚本
 #
 # 用法:
-#   bash build.sh <target> [--release|--debug] [--force]
+#   bash build.sh <target> [--release|--debug] [--force] [--pull]
 #
 # 目标:
 #   opengauss  - 编译 openGauss 数据库（全量，耗时 30-60 分钟）
@@ -14,17 +14,20 @@
 #   delta      - 编译 iceberg_delta（依赖 openGauss + catalog）
 #
 # --force: 全量重编（make clean / cargo clean / rm -rf build 后再编译）
+# --pull:  编译前 git pull 目标仓库（及 Rust 依赖）最新代码
 # 不加时: bridge/fdw/catalog/delta 走增量编译; opengauss 产物存在则跳过
 #
 # 示例:
 #   bash build.sh fdw                    # 增量
 #   bash build.sh bridge --release       # release 增量
 #   bash build.sh catalog --force        # 全量重编
+#   bash build.sh fdw --pull             # 拉最新代码 + 增量编译
 # ============================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FORCE_REBUILD=false
+PULL_BEFORE_BUILD=false
 BUILD_MODE=""
 
 # ---- 解析参数 ----
@@ -32,10 +35,11 @@ TARGET=""
 for arg in "$@"; do
     case "$arg" in
         --force)     FORCE_REBUILD=true ;;
+        --pull)      PULL_BEFORE_BUILD=true ;;
         --release)   BUILD_MODE=release ;;
         --debug)     BUILD_MODE=debug ;;
         -h|--help)
-            sed -n '2,21p' "$0"
+            sed -n '2,22p' "$0"
             exit 0
             ;;
         *)           TARGET="$arg" ;;
@@ -207,6 +211,10 @@ build_opengauss() {
     if $FORCE_REBUILD; then
         info "--force: 强制全量重编"
     fi
+    if $PULL_BEFORE_BUILD; then
+        info "git pull openGauss-server-datainfra ($OPENGAUSS_BRANCH)"
+        (cd "$OPENGAUSS_REPO" && git fetch origin && git checkout "$OPENGAUSS_BRANCH" && git pull origin "$OPENGAUSS_BRANCH") || warn "openGauss pull failed"
+    fi
 
     source "$ICEBERG_OG_ROOT/opengauss.env" 2>/dev/null || true
     export PATH="$OG_SHIM:$GCC_HOME/bin:/usr/local/bin:/usr/bin:/bin"
@@ -239,6 +247,11 @@ build_index() {
     setup_rust
     check_file "iceberg-index 源码" "$ICEBERG_INDEX_REPO/Cargo.toml"
 
+    if $PULL_BEFORE_BUILD; then
+        info "git pull iceberg-index ($ICEBERG_INDEX_BRANCH)"
+        (cd "$ICEBERG_INDEX_REPO" && git fetch origin && git checkout "$ICEBERG_INDEX_BRANCH" && git pull origin "$ICEBERG_INDEX_BRANCH") || warn "iceberg-index pull failed"
+    fi
+
     cd "$ICEBERG_INDEX_REPO"
     cargo check --workspace 2>&1
     info "iceberg-index 检查通过"
@@ -256,19 +269,26 @@ build_bridge() {
     check_file "iceberg-index 源码" "$ICEBERG_INDEX_REPO/Cargo.toml"
     check_file "iceberg-rust-bridge 源码" "$ICEBERG_BRIDGE_REPO/Cargo.toml"
 
+    if $PULL_BEFORE_BUILD; then
+        info "git pull iceberg-index ($ICEBERG_INDEX_BRANCH)"
+        (cd "$ICEBERG_INDEX_REPO" && git fetch origin && git checkout "$ICEBERG_INDEX_BRANCH" && git pull origin "$ICEBERG_INDEX_BRANCH") || warn "iceberg-index pull failed"
+        info "git pull iceberg-rust-bridge ($ICEBERG_BRIDGE_BRANCH)"
+        (cd "$ICEBERG_BRIDGE_REPO" && git fetch origin && git checkout "$ICEBERG_BRIDGE_BRANCH" && git pull origin "$ICEBERG_BRIDGE_BRANCH") || warn "iceberg-rust-bridge pull failed"
+    fi
+
     export LD_LIBRARY_PATH=
     source "$HOME/.cargo/env"
 
     info "cargo check iceberg-index (依赖检查)..."
     cd "$ICEBERG_INDEX_REPO"
-    cargo check --workspace 2>&1 | tail -3
+    cargo check --workspace 2>&1
 
     cargo_flags=""
     [ "$BUILD_MODE" = "release" ] && cargo_flags="--release"
 
     cd "$ICEBERG_BRIDGE_REPO"
     if $FORCE_REBUILD; then
-        cargo clean 2>&1 | tail -1
+        cargo clean 2>&1
     fi
     cargo build $cargo_flags \
         --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-abi.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-abi\"" \
@@ -276,7 +296,7 @@ build_bridge() {
         --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-iceberg.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-iceberg\"" \
         --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-plugins.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-plugins\"" \
         --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-runtime.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-runtime\"" \
-        2>&1 | tail -5
+        2>&1
 
     echo "$BUILD_MODE" > "${BRIDGE_SO}.build_mode"
     ls -lh "$BRIDGE_SO"
@@ -296,6 +316,11 @@ build_fdw() {
     check_file "GAUSSHOME (pg_config)" "$GAUSSHOME/bin/pg_config"
     check_file "iceberg_fdw 源码" "$ICEBERG_FDW_REPO/Makefile"
 
+    if $PULL_BEFORE_BUILD; then
+        info "git pull iceberg_fdw ($ICEBERG_FDW_BRANCH)"
+        (cd "$ICEBERG_FDW_REPO" && git fetch origin && git checkout "$ICEBERG_FDW_BRANCH" && git pull origin "$ICEBERG_FDW_BRANCH") || warn "iceberg_fdw pull failed"
+    fi
+
     setup_python_shim
     export PATH="$OG_SHIM:$GCC_HOME/bin:$GAUSSHOME/bin:/usr/bin:/bin"
     export LD_LIBRARY_PATH="$GCC_HOME/lib64:$GCTOOLS/isl/lib:$GCTOOLS/mpc/lib:$GCTOOLS/mpfr/lib:$GCTOOLS/gmp/lib:$GAUSSHOME/lib:$GAUSSHOME/lib/postgresql:$PYTHON_HOME/lib:$SSL_HOME/lib:/usr/lib64:/lib64"
@@ -308,8 +333,8 @@ build_fdw() {
         make clean 2>/dev/null || true
     fi
     make PG_CONFIG="$GAUSSHOME/bin/pg_config" \
-        OPENGAUSS_SRC_INCLUDE="$OPENGAUSS_REPO/src/include" 2>&1 | tail -5
-    make install PG_CONFIG="$GAUSSHOME/bin/pg_config" 2>&1 | tail -3
+        OPENGAUSS_SRC_INCLUDE="$OPENGAUSS_REPO/src/include" 2>&1
+    make install PG_CONFIG="$GAUSSHOME/bin/pg_config" 2>&1
 
     cp iceberg_fdw.so "$GAUSSHOME/lib/postgresql/iceberg_fdw.so"
     cp iceberg_fdw.so "$GAUSSHOME/lib/postgresql/proc_srclib/iceberg_fdw.so"
@@ -333,6 +358,11 @@ build_catalog() {
     check_file "bridge header" "$BRIDGE_HEADER"
     check_file "openGauss-Catalog 源码" "$ICEBERG_CATALOG_REPO/Makefile"
 
+    if $PULL_BEFORE_BUILD; then
+        info "git pull openGauss-Catalog ($ICEBERG_CATALOG_BRANCH)"
+        (cd "$ICEBERG_CATALOG_REPO" && git fetch origin && git checkout "$ICEBERG_CATALOG_BRANCH" && git pull origin "$ICEBERG_CATALOG_BRANCH") || warn "openGauss-Catalog pull failed"
+    fi
+
     setup_python_shim
     export PATH="$OG_SHIM:$GCC_HOME/bin:$GAUSSHOME/bin:/usr/bin:/bin"
     export LD_LIBRARY_PATH="$GCC_HOME/lib64:$GCTOOLS/isl/lib:$GCTOOLS/mpc/lib:$GCTOOLS/mpfr/lib:$GCTOOLS/gmp/lib:$GAUSSHOME/lib:$GAUSSHOME/lib/postgresql:$PYTHON_HOME/lib:$SSL_HOME/lib:/usr/lib64:/lib64"
@@ -348,7 +378,7 @@ build_catalog() {
     if $FORCE_REBUILD; then
         make clean 2>/dev/null || true
     fi
-    make PG_CONFIG="$GAUSSHOME/bin/pg_config" GAUSS_SRC="$OPENGAUSS_REPO" 2>&1 | tail -5
+    make PG_CONFIG="$GAUSSHOME/bin/pg_config" GAUSS_SRC="$OPENGAUSS_REPO" 2>&1
 
     cp iceberg_catalog.so "$GAUSSHOME/lib/postgresql/iceberg_catalog.so"
     cp iceberg_catalog.so "$GAUSSHOME/lib/postgresql/proc_srclib/iceberg_catalog.so"
@@ -369,6 +399,11 @@ build_delta() {
     check_file "GAUSSHOME (pg_config)" "$GAUSSHOME/bin/pg_config"
     check_file "catalog header" "$ICEBERG_CATALOG_REPO/src/include/iceberg_catalog.h"
     check_file "iceberg_delta 源码" "$ICEBERG_DELTA_REPO/CMakeLists.txt"
+
+    if $PULL_BEFORE_BUILD; then
+        info "git pull iceberg_delta ($ICEBERG_DELTA_BRANCH)"
+        (cd "$ICEBERG_DELTA_REPO" && git fetch origin && git checkout "$ICEBERG_DELTA_BRANCH" && git pull origin "$ICEBERG_DELTA_BRANCH") || warn "iceberg_delta pull failed"
+    fi
 
     DELTA_BUILD="$ICEBERG_DELTA_REPO/tmp_build_gcc10"
     local configure_needed=false
@@ -397,12 +432,12 @@ build_delta() {
         cmake "$ICEBERG_DELTA_REPO" \
             -DCMAKE_BUILD_TYPE="$cmake_build_type" \
             -DGAUSS_SRC="$OPENGAUSS_REPO" \
-            -DICEBERG_CATALOG_INCLUDE="$ICEBERG_CATALOG_REPO/src/include" 2>&1 | tail -3
-        cmake --build . --parallel "$BUILD_JOBS" 2>&1 | tail -5
+            -DICEBERG_CATALOG_INCLUDE="$ICEBERG_CATALOG_REPO/src/include" 2>&1
+        cmake --build . --parallel "$BUILD_JOBS" 2>&1
     else
         cd "$DELTA_BUILD"
         info "cmake --build (增量)..."
-        cmake --build . --parallel "$BUILD_JOBS" 2>&1 | tail -5
+        cmake --build . --parallel "$BUILD_JOBS" 2>&1
     fi
 
     ensure_dir "$GAUSSHOME/lib/postgresql/proc_srclib"
@@ -453,6 +488,7 @@ echo -e "${GREEN}============================================${NC}"
 echo -e "${GREEN}  openGauss Iceberg — 单仓编译${NC}"
 echo -e "${GREEN}  目标: ${TARGET}  |  模式: ${BUILD_MODE}${NC}"
 $FORCE_REBUILD && echo -e "${GREEN}  --force: 全量重编${NC}"
+$PULL_BEFORE_BUILD && echo -e "${GREEN}  --pull: 编译前拉取最新代码${NC}"
 echo -e "${GREEN}============================================${NC}"
 
 if [ "$TARGET" != "opengauss" ] && [ "$TARGET" != "index" ]; then

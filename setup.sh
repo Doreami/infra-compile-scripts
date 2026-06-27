@@ -10,10 +10,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FORCE_REBUILD=false
 SKIP_UPDATE=false
+PULL_BEFORE_BUILD=false
 for arg in "$@"; do
     case "$arg" in
         --force) FORCE_REBUILD=true ;;
         --skip-update) SKIP_UPDATE=true ;;
+        --pull) PULL_BEFORE_BUILD=true ;;
         --release) BUILD_MODE=release ;;
         --debug) BUILD_MODE=debug ;;
     esac
@@ -347,22 +349,32 @@ step "7. 编译 iceberg-rust-bridge"
 
 BRIDGE_SO="$ICEBERG_BRIDGE_REPO/target/$([ "$BUILD_MODE" = "release" ] && echo release || echo debug)/libiceberg_rust_bridge.so"
 if skip_or_rebuild "iceberg-rust-bridge" "$BRIDGE_SO" "iceberg-rust-bridge" "iceberg-index"; then
+    if $PULL_BEFORE_BUILD; then
+        echo "  [PULL] iceberg-index ($ICEBERG_INDEX_BRANCH)"
+        (cd "$ICEBERG_INDEX_REPO" && git fetch origin && git checkout "$ICEBERG_INDEX_BRANCH" && git pull origin "$ICEBERG_INDEX_BRANCH") || warn "iceberg-index pull failed"
+        echo "  [PULL] iceberg-rust-bridge ($ICEBERG_BRIDGE_BRANCH)"
+        (cd "$ICEBERG_BRIDGE_REPO" && git fetch origin && git checkout "$ICEBERG_BRIDGE_BRANCH" && git pull origin "$ICEBERG_BRIDGE_BRANCH") || warn "iceberg-rust-bridge pull failed"
+    fi
+
     export LD_LIBRARY_PATH=   # Rust 不能用 GCC10 的 libstdc++
     source "$HOME/.cargo/env"
 
     cd "$ICEBERG_INDEX_REPO"
-    cargo check --workspace 2>&1 | tail -3
+    cargo check --workspace 2>&1
 
     cargo_flags=""
     [ "$BUILD_MODE" = "release" ] && cargo_flags="--release"
     cd "$ICEBERG_BRIDGE_REPO"
+    if $FORCE_REBUILD; then
+        cargo clean 2>&1
+    fi
     cargo build $cargo_flags \
     --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-abi.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-abi\"" \
     --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-core.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-core\"" \
     --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-iceberg.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-iceberg\"" \
     --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-plugins.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-plugins\"" \
     --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-runtime.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-runtime\"" \
-    2>&1 | tail -3
+    2>&1
 
     ls -lh "$BRIDGE_SO"
     echo "$BUILD_MODE" > "${BRIDGE_SO}.build_mode"
@@ -388,10 +400,16 @@ echo "bridge OK"
 # 8b. iceberg_fdw
 if skip_or_rebuild "iceberg_fdw" "$GAUSSHOME/lib/postgresql/iceberg_fdw.so" "iceberg_fdw" "openGauss-server-datainfra"; then
     echo "building iceberg_fdw..."
+    if $PULL_BEFORE_BUILD; then
+        echo "  [PULL] iceberg_fdw ($ICEBERG_FDW_BRANCH)"
+        (cd "$ICEBERG_FDW_REPO" && git fetch origin && git checkout "$ICEBERG_FDW_BRANCH" && git pull origin "$ICEBERG_FDW_BRANCH") || warn "iceberg_fdw pull failed"
+    fi
     cd "$ICEBERG_FDW_REPO"
-    make clean 2>/dev/null || true
-    make PG_CONFIG="$GAUSSHOME/bin/pg_config" OPENGAUSS_SRC_INCLUDE="$OPENGAUSS_REPO/src/include" 2>&1 | tail -5
-    make install PG_CONFIG="$GAUSSHOME/bin/pg_config" 2>&1 | tail -3
+    if $FORCE_REBUILD; then
+        make clean 2>/dev/null || true
+    fi
+    make PG_CONFIG="$GAUSSHOME/bin/pg_config" OPENGAUSS_SRC_INCLUDE="$OPENGAUSS_REPO/src/include" 2>&1
+    make install PG_CONFIG="$GAUSSHOME/bin/pg_config" 2>&1
     cp iceberg_fdw.so "$GAUSSHOME/lib/postgresql/iceberg_fdw.so"
     cp iceberg_fdw.so "$GAUSSHOME/lib/postgresql/proc_srclib/iceberg_fdw.so"
     cp iceberg_fdw.control "$GAUSSHOME/share/postgresql/extension/"
@@ -403,12 +421,18 @@ echo "iceberg_fdw OK"
 # 8c. openGauss-Catalog
 if skip_or_rebuild "iceberg_catalog" "$GAUSSHOME/lib/postgresql/iceberg_catalog.so" "openGauss-Catalog" "iceberg-rust-bridge" "openGauss-server-datainfra"; then
     echo "building openGauss-Catalog..."
+    if $PULL_BEFORE_BUILD; then
+        echo "  [PULL] openGauss-Catalog ($ICEBERG_CATALOG_BRANCH)"
+        (cd "$ICEBERG_CATALOG_REPO" && git fetch origin && git checkout "$ICEBERG_CATALOG_BRANCH" && git pull origin "$ICEBERG_CATALOG_BRANCH") || warn "openGauss-Catalog pull failed"
+    fi
     mkdir -p "$ICEBERG_CATALOG_REPO/deps"
     cp "$BRIDGE_SO" "$ICEBERG_CATALOG_REPO/deps/libiceberg_rust_bridge.so"
     cp "$ICEBERG_BRIDGE_REPO/include/iceberg_bridge.h" "$ICEBERG_CATALOG_REPO/deps/"
     cd "$ICEBERG_CATALOG_REPO"
-    make clean 2>/dev/null || true
-    make PG_CONFIG="$GAUSSHOME/bin/pg_config" GAUSS_SRC="$OPENGAUSS_REPO" 2>&1 | tail -5
+    if $FORCE_REBUILD; then
+        make clean 2>/dev/null || true
+    fi
+    make PG_CONFIG="$GAUSSHOME/bin/pg_config" GAUSS_SRC="$OPENGAUSS_REPO" 2>&1
     cp iceberg_catalog.so "$GAUSSHOME/lib/postgresql/iceberg_catalog.so"
     cp iceberg_catalog.so "$GAUSSHOME/lib/postgresql/proc_srclib/iceberg_catalog.so"
     cp iceberg_catalog.control "$GAUSSHOME/share/postgresql/extension/"
@@ -420,23 +444,40 @@ echo "iceberg_catalog OK"
 # 8d. iceberg_delta (cmake)
 if skip_or_rebuild "iceberg_delta" "$GAUSSHOME/lib/postgresql/iceberg_delta.so" "iceberg_delta" "openGauss-server-datainfra" "openGauss-Catalog"; then
     echo "building iceberg_delta..."
+    if $PULL_BEFORE_BUILD; then
+        echo "  [PULL] iceberg_delta ($ICEBERG_DELTA_BRANCH)"
+        (cd "$ICEBERG_DELTA_REPO" && git fetch origin && git checkout "$ICEBERG_DELTA_BRANCH" && git pull origin "$ICEBERG_DELTA_BRANCH") || warn "iceberg_delta pull failed"
+    fi
     DELTA_BUILD="$ICEBERG_DELTA_REPO/tmp_build_gcc10"
-    rm -rf "$DELTA_BUILD"
-    mkdir -p "$DELTA_BUILD"
-    cd "$DELTA_BUILD"
+    local configure_needed=false
+
+    if $FORCE_REBUILD; then
+        rm -rf "$DELTA_BUILD"
+        configure_needed=true
+    elif [ ! -d "$DELTA_BUILD" ] || [ ! -f "$DELTA_BUILD/CMakeCache.txt" ]; then
+        configure_needed=true
+    fi
 
     # cmake 需要系统 libstdc++（避免 GCC ABI 冲突）
     export CC="$GCC_HOME/bin/gcc" CXX="$GCC_HOME/bin/g++"
     export PATH="$GAUSSHOME/bin:$GCC_HOME/bin:/usr/bin:/bin"
     export LD_LIBRARY_PATH="/usr/lib64:/lib64:$GCC_HOME/lib64:$GCTOOLS/isl/lib:$GCTOOLS/mpc/lib:$GCTOOLS/mpfr/lib:$GCTOOLS/gmp/lib:$GAUSSHOME/lib"
 
-    cmake_build_type="Debug"
-    [ "$BUILD_MODE" = "release" ] && cmake_build_type="Release"
-    cmake "$ICEBERG_DELTA_REPO" \
-        -DCMAKE_BUILD_TYPE="$cmake_build_type" \
-        -DGAUSS_SRC="$OPENGAUSS_REPO" \
-        -DICEBERG_CATALOG_INCLUDE="$ICEBERG_CATALOG_REPO/src/include" 2>&1 | tail -3
-    cmake --build . --parallel "$BUILD_JOBS" 2>&1 | tail -5
+    if $configure_needed; then
+        mkdir -p "$DELTA_BUILD"
+        cd "$DELTA_BUILD"
+
+        cmake_build_type="Debug"
+        [ "$BUILD_MODE" = "release" ] && cmake_build_type="Release"
+        cmake "$ICEBERG_DELTA_REPO" \
+            -DCMAKE_BUILD_TYPE="$cmake_build_type" \
+            -DGAUSS_SRC="$OPENGAUSS_REPO" \
+            -DICEBERG_CATALOG_INCLUDE="$ICEBERG_CATALOG_REPO/src/include" 2>&1
+        cmake --build . --parallel "$BUILD_JOBS" 2>&1
+    else
+        cd "$DELTA_BUILD"
+        cmake --build . --parallel "$BUILD_JOBS" 2>&1
+    fi
     cp iceberg_delta.so "$GAUSSHOME/lib/postgresql/iceberg_delta.so"
     cp iceberg_delta.so "$GAUSSHOME/lib/postgresql/proc_srclib/iceberg_delta.so"
     cp "$ICEBERG_DELTA_REPO/iceberg_delta.control" "$GAUSSHOME/share/postgresql/extension/"

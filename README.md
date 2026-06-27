@@ -43,11 +43,11 @@ GITHUB_TOKEN="XXX" # token
 # 再次运行 → 检测已有产物自动跳过
 sh setup.sh
 
-# 特殊参数：
---force # 全量重编
---skip-update # 不拉代码，只检查产物是否存在
---debug            # 全链路 debug（默认）
---release          # 全链路 release
+# 可选参数：
+--force             # 全量重编
+--skip-update       # 不拉代码，只检查产物是否存在
+--debug             # 全链路 debug（默认）
+--release           # 全链路 release
 
 # 说明
 # opengauss仓仅支持全量编译 (通过检查二进制来判断是否要重编)
@@ -64,6 +64,30 @@ sh setup.sh
 │ setup.sh --force --skip-update │ ❌     │ 全量 │
 └────────────────────────────────┴────────┴──────┘
 ```
+
+### 5b. 单独编译某个仓
+
+首次 `setup.sh` 全量搭建之后，日常开发只需重编改动的仓：
+
+```shell
+bash build.sh <目标> [--release|--debug] [--force]
+
+# 目标:
+#   opengauss  - openGauss 数据库（30-60 分钟，全量）
+#   bridge     - iceberg-rust-bridge（依赖 iceberg-index）
+#   fdw        - iceberg_fdw（依赖 openGauss）
+#   catalog    - openGauss-Catalog（依赖 openGauss + bridge）
+#   delta      - iceberg_delta（依赖 openGauss + catalog）
+#   index      - cargo check（仅 Rust 语法检查）
+
+# 示例:
+bash build.sh fdw                  # 增量（产物存在则跳过）
+bash build.sh bridge --release     # release 模式
+bash build.sh catalog --force      # 强制重编
+```
+
+依赖链：`opengauss` → `bridge` → `catalog` → `delta`，`fdw` 只需 `opengauss`。  
+脚本会自动检查前置依赖，缺失时提示先编译上游仓。
 
 # 6. init && start db
 
@@ -130,10 +154,19 @@ EXPLAIN (VERBOSE, COSTS OFF)
 SELECT * FROM iceberg_ns.test;
 ```
 
-# 8. 存储接minIO
+# 8. 存储接 minIO（规划中）
 
-`TODO`
+> 计划支持将 Iceberg 表数据存储在 minIO 对象存储上，与本地文件系统 warehouse 并存。
 
 ```shell
-
+# 示例环境变量
+export ICEBERG_WAREHOUSE=s3://bucket-name/
+export AWS_ENDPOINT=http://localhost:9000
+export AWS_ACCESS_KEY_ID=minioadmin
+export AWS_SECRET_ACCESS_KEY=minioadmin
 ```
+
+---
+
+> **遇到问题？** 查看 `项目说明.md`，包含已知问题（boost ABI、cmake GLIBCXX 等）及解决方案。
+

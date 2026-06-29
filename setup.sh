@@ -115,18 +115,39 @@ fi
 step "1. 准备 binarylibs"
 
 if [ ! -d "$BINARYLIBS_DIR/buildtools/gcc10.3" ]; then
-    TARBALL="$SCRIPT_DIR/openGauss-third_party_binarylibs_openEuler_x86_64.tar.gz"
+    # 根据 OS 版本拼装 binarylibs 文件名
+    OS_VERSION=$(grep -oP 'VERSION_ID="?\K[0-9]+\.[0-9]+' /etc/os-release 2>/dev/null || echo "")
+    case "$OS_VERSION" in
+        24.03) BINARYLIBS_SUFFIX="openEuler_2403_x86_64" ;;
+        22.03) BINARYLIBS_SUFFIX="openEuler_2203_x86_64" ;;
+        *)     BINARYLIBS_SUFFIX="openEuler_x86_64" ;;
+    esac
+    TARBALL_NAME="openGauss-third_party_binarylibs_${BINARYLIBS_SUFFIX}.tar.gz"
+    TARBALL="$SCRIPT_DIR/$TARBALL_NAME"
     DOWNLOADED=false
 
-    # 1) 检查脚本所在目录是否有 tar.gz（手动下载或 lfs pull）
+    # 兜底 URL（优先级：config.env 自定义 > 自动拼接）
+    if [ -z "$BINARYLIBS_DOWNLOAD_URL" ]; then
+        BINARYLIBS_DOWNLOAD_URL="https://opengauss.obs.cn-south-1.myhuaweicloud.com/latest/binarylibs/gcc10.3/$TARBALL_NAME"
+    fi
+
+    # 1) 检查脚本所在目录是否有 tar.gz（手动下载或已存在）
     if [ -f "$TARBALL" ]; then
         echo "发现本地 binarylibs 压缩包: $TARBALL"
     else
-        # 2) 自动从华为云 OBS 下载（国内速度快，~1.5GB）
-        echo "binarylibs 不存在，自动下载 (华为云 OBS)..."
+        # 也检查旧格式文件名（兼容）
+        OLD_TARBALL=$(ls "$SCRIPT_DIR"/openGauss-third_party_binarylibs_*.tar.gz 2>/dev/null | head -1)
+        if [ -n "$OLD_TARBALL" ] && [ "$OLD_TARBALL" != "$TARBALL" ]; then
+            echo "发现已有 binarylibs: $OLD_TARBALL（使用中）"
+            TARBALL="$OLD_TARBALL"
+        fi
+    fi
+
+    if [ ! -f "$TARBALL" ]; then
+        # 2) 自动从华为云 OBS 下载（国内速度快，~800MB）
+        echo "OS: openEuler ${OS_VERSION:-unknown} → ${TARBALL_NAME}"
         echo "URL: $BINARYLIBS_DOWNLOAD_URL"
 
-        # 优先 wget（支持断点续传），fallback curl
         if command -v wget >/dev/null 2>&1; then
             wget -c "$BINARYLIBS_DOWNLOAD_URL" -O "$TARBALL" 2>&1
         elif command -v curl >/dev/null 2>&1; then

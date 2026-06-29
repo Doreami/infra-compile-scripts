@@ -347,6 +347,17 @@ patch_boost "$OPENGAUSS_REPO/src/gausskernel/Makefile"
 patch_boost "$OPENGAUSS_REPO/src/gausskernel/CMakeLists.txt"
 echo "Patch 完成"
 
+# 5c. 修复 onnxruntime 符号链接（2403 binarylibs 默认指向 1.16.3，但 onnx_wrapper 需要 1.22.0）
+ONNX_LIB="$BINARYLIBS_DIR/kernel/dependency/onnxruntime"
+if [ -f "$ONNX_LIB/comm/lib/libonnx_wrapper.so" ] && [ -f "$ONNX_LIB/comm/lib/libonnxruntime.so.1.22.0" ]; then
+    echo "修正 onnxruntime 符号链接 → 1.22.0..."
+    for subdir in comm llt; do
+        ln -sfn libonnxruntime.so.1.22.0 "$ONNX_LIB/$subdir/lib/libonnxruntime.so.1"
+        ln -sfn libonnxruntime.so.1 "$ONNX_LIB/$subdir/lib/libonnxruntime.so"
+    done
+    echo "onnxruntime 链接已修正"
+fi
+
 
 # ============================================================
 # 6. 编译 openGauss

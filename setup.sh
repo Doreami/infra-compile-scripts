@@ -482,7 +482,7 @@ echo "iceberg_catalog OK"
 if skip_or_rebuild "iceberg_delta" "$GAUSSHOME/lib/postgresql/iceberg_delta.so" "iceberg_delta" "openGauss-server-datainfra" "openGauss-Catalog"; then
     echo "building iceberg_delta..."
     DELTA_BUILD="$ICEBERG_DELTA_REPO/tmp_build_gcc10"
-    local configure_needed=false
+    configure_needed=false
 
     if $FORCE_REBUILD; then
         rm -rf "$DELTA_BUILD"

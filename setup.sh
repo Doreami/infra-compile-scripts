@@ -136,7 +136,7 @@ if [ ! -d "$BINARYLIBS_DIR/buildtools/gcc10.3" ]; then
         echo "发现本地 binarylibs 压缩包: $TARBALL"
     else
         # 也检查旧格式文件名（兼容）
-        OLD_TARBALL=$(ls "$SCRIPT_DIR"/openGauss-third_party_binarylibs_*.tar.gz 2>/dev/null | head -1)
+        OLD_TARBALL=$(ls "$SCRIPT_DIR"/openGauss-third_party_binarylibs_*.tar.gz 2>/dev/null | head -1) || true
         if [ -n "$OLD_TARBALL" ] && [ "$OLD_TARBALL" != "$TARBALL" ]; then
             echo "发现已有 binarylibs: $OLD_TARBALL（使用中）"
             TARBALL="$OLD_TARBALL"
@@ -164,7 +164,7 @@ if [ ! -d "$BINARYLIBS_DIR/buildtools/gcc10.3" ]; then
     mkdir -p "$ICEBERG_OG_ROOT"
     cd "$ICEBERG_OG_ROOT"
     tar xzf "$TARBALL" 2>&1 | tail -1
-    EXTRACTED=$(ls -d openGauss-third_party_binarylibs_* 2>/dev/null | head -1)
+    EXTRACTED=$(ls -d openGauss-third_party_binarylibs_* 2>/dev/null | head -1) || true
     if [ -n "$EXTRACTED" ] && [ ! -d binarylibs ]; then
         mv "$EXTRACTED" binarylibs
     fi

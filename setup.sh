@@ -438,6 +438,7 @@ export LD_LIBRARY_PATH="$GCC_HOME/lib64:$GCTOOLS/isl/lib:$GCTOOLS/mpc/lib:$GCTOO
 mkdir -p "$GAUSSHOME/lib/postgresql/proc_srclib" "$GAUSSHOME/share/postgresql/extension"
 
 # 8a. Install bridge .so (always, lightweight)
+export ICEBERG_RUST_BRIDGE_HOME="${ICEBERG_RUST_BRIDGE_HOME:-$ICEBERG_BRIDGE_REPO}"
 echo "Installing bridge..."
 cp "$BRIDGE_SO" "$GAUSSHOME/lib/postgresql/libiceberg_rust_bridge.so"
 echo "bridge OK"

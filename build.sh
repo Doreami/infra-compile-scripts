@@ -399,6 +399,7 @@ build_delta() {
     check_file "GAUSSHOME (pg_config)" "$GAUSSHOME/bin/pg_config"
     check_file "catalog header" "$ICEBERG_CATALOG_REPO/src/include/iceberg_catalog.h"
     check_file "iceberg_delta 源码" "$ICEBERG_DELTA_REPO/CMakeLists.txt"
+    export ICEBERG_RUST_BRIDGE_HOME="${ICEBERG_RUST_BRIDGE_HOME:-$ICEBERG_BRIDGE_REPO}"
 
     if $PULL_BEFORE_BUILD; then
         info "git pull iceberg_delta ($ICEBERG_DELTA_BRANCH)"

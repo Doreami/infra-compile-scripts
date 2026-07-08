@@ -86,4 +86,8 @@ echo -e "${GREEN}============================================${NC}"
 echo ""
 
 # ---- 运行测试 ----
+# 没传参数时默认跑全量
+if [ $# -eq 0 ]; then
+    set -- --schedule test/schedules/serial_schedule
+fi
 exec "$DEVTEST_RUNNER" "$@"

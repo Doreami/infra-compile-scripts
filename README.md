@@ -176,6 +176,21 @@ export AWS_ACCESS_KEY_ID=minioadmin
 export AWS_SECRET_ACCESS_KEY=minioadmin
 ```
 
+# 9. 端到端测试
+
+编译完成后运行回归测试：
+
+```shell
+# 首次会自动 clone DataInfra-devtest 测试仓库
+bash run_test.sh
+
+# 指定测试用例
+bash run_test.sh --case 01_basic_opengauss
+
+# 失败即停
+bash run_test.sh --stop-on-failure
+```
+
 ---
 
 > **遇到问题？** 查看 `项目说明.md`，包含已知问题（boost ABI、cmake GLIBCXX 等）及解决方案。

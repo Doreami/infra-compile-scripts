@@ -86,6 +86,9 @@ echo -e "${GREEN}============================================${NC}"
 echo ""
 
 # ---- 运行测试 ----
+# devtest runner 期望从 DataInfra-devtest 根目录运行
+cd "$DEVTEST_REPO"
+
 # 没传参数时默认跑全量
 if [ $# -eq 0 ]; then
     set -- --schedule test/schedules/serial_schedule

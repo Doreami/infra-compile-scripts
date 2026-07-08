@@ -70,6 +70,8 @@ ICEBERG_FDW_REPO="$ICEBERG_OG_ROOT/iceberg_fdw"
 ICEBERG_CATALOG_REPO="$ICEBERG_OG_ROOT/openGauss-Catalog"
 ICEBERG_DELTA_REPO="$ICEBERG_OG_ROOT/iceberg_delta"
 ICEBERG_RUST_DATAINFRA_REPO="$ICEBERG_OG_ROOT/iceberg-rust-datainfra"
+ICEBERG_ARROW_DEPS_REPO="$ICEBERG_OG_ROOT/iceberg-arrow-deps"
+ARROW_HOME="${ARROW_HOME:-$ICEBERG_OG_ROOT/arrow_install}"
 GAUSSHOME="$OPENGAUSS_REPO/mppdb_temp_install"
 
 GCC_HOME="$BINARYLIBS_DIR/buildtools/gcc10.3/gcc"
@@ -402,6 +404,20 @@ build_delta() {
     check_file "iceberg_delta 源码" "$ICEBERG_DELTA_REPO/CMakeLists.txt"
     export ICEBERG_RUST_BRIDGE_HOME="${ICEBERG_RUST_BRIDGE_HOME:-$ICEBERG_BRIDGE_REPO}"
 
+    # 检查/构建 Arrow
+    if [ ! -f "$ARROW_HOME/lib64/libarrow.so" ] && [ ! -f "$ARROW_HOME/lib/libarrow.so" ] && \
+       ! ldconfig -p 2>/dev/null | grep -q libarrow && \
+       [ ! -f /usr/lib64/libarrow.so ] && [ ! -f /usr/lib/libarrow.so ]; then
+        if [ -f "$ICEBERG_ARROW_DEPS_REPO/build_arrow.sh" ]; then
+            info "Apache Arrow C++ 未安装，自动构建..."
+            env CC="$GCC_HOME/bin/gcc" CXX="$GCC_HOME/bin/g++" \
+                LD_LIBRARY_PATH="$GCTOOLS/isl/lib:$GCTOOLS/mpc/lib:$GCTOOLS/mpfr/lib:$GCTOOLS/gmp/lib" \
+                bash "$ICEBERG_ARROW_DEPS_REPO/build_arrow.sh"
+        else
+            error "Arrow 未安装且 iceberg-arrow-deps 仓库未克隆。请先安装 Arrow 或克隆 arrow-deps 仓库"
+        fi
+    fi
+
     if $PULL_BEFORE_BUILD; then
         info "git pull iceberg_delta ($ICEBERG_DELTA_BRANCH)"
         (cd "$ICEBERG_DELTA_REPO" && git fetch origin && git checkout "$ICEBERG_DELTA_BRANCH" && git pull origin "$ICEBERG_DELTA_BRANCH") || warn "iceberg_delta pull failed"
@@ -434,7 +450,9 @@ build_delta() {
         cmake "$ICEBERG_DELTA_REPO" \
             -DCMAKE_BUILD_TYPE="$cmake_build_type" \
             -DGAUSS_SRC="$OPENGAUSS_REPO" \
-            -DICEBERG_CATALOG_INCLUDE="$ICEBERG_CATALOG_REPO/src/include" 2>&1
+            -DICEBERG_CATALOG_INCLUDE="$ICEBERG_CATALOG_REPO/src/include" \
+            -DARROW_HOME="$ARROW_HOME" \
+            -DICEBERG_RUST_BRIDGE_HOME="$ICEBERG_BRIDGE_REPO" 2>&1
         cmake --build . --parallel "$BUILD_JOBS" 2>&1
     else
         cd "$DELTA_BUILD"

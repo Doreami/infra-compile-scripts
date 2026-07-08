@@ -63,6 +63,8 @@ ICEBERG_FDW_REPO="$ICEBERG_OG_ROOT/iceberg_fdw"
 ICEBERG_CATALOG_REPO="$ICEBERG_OG_ROOT/openGauss-Catalog"
 ICEBERG_DELTA_REPO="$ICEBERG_OG_ROOT/iceberg_delta"
 ICEBERG_RUST_DATAINFRA_REPO="$ICEBERG_OG_ROOT/iceberg-rust-datainfra"
+ICEBERG_ARROW_DEPS_REPO="$ICEBERG_OG_ROOT/iceberg-arrow-deps"
+ARROW_HOME="${ARROW_HOME:-$ICEBERG_OG_ROOT/arrow_install}"
 # build.sh 硬编码安装到 mppdb_temp_install，不做额外处理
 GAUSSHOME="$OPENGAUSS_REPO/mppdb_temp_install"
 
@@ -242,6 +244,7 @@ REPOS=(
     "openGauss-Catalog:$ICEBERG_CATALOG_BRANCH:$ICEBERG_CATALOG_REPO_URL"
     "iceberg_delta:$ICEBERG_DELTA_BRANCH:$ICEBERG_DELTA_REPO_URL"
     "iceberg-rust-datainfra:$ICEBERG_RUST_DATAINFRA_BRANCH:$ICEBERG_RUST_DATAINFRA_REPO_URL"
+    "iceberg-arrow-deps:$ICEBERG_ARROW_DEPS_BRANCH:$ICEBERG_ARROW_DEPS_REPO_URL"
 )
 for entry in "${REPOS[@]}"; do
     IFS=':' read -r d b u <<< "$entry"
@@ -481,22 +484,27 @@ if skip_or_rebuild "iceberg_catalog" "$GAUSSHOME/lib/postgresql/iceberg_catalog.
 fi
 echo "iceberg_catalog OK"
 
-# 8d. iceberg_delta (cmake) — 可选：需要 Apache Arrow
+# 8d. iceberg_delta (cmake) — 需要 Apache Arrow，缺失时自动构建
 if skip_or_rebuild "iceberg_delta" "$GAUSSHOME/lib/postgresql/iceberg_delta.so" "iceberg_delta" "openGauss-server-datainfra" "openGauss-Catalog"; then
-    # 检查 Arrow 是否可用
-    ARROW_FOUND=false
-    if [ -n "${ARROW_HOME:-}" ] && [ -f "$ARROW_HOME/lib64/libarrow.so" -o -f "$ARROW_HOME/lib/libarrow.so" ]; then
-        ARROW_FOUND=true
-    elif ldconfig -p 2>/dev/null | grep -q libarrow; then
-        ARROW_FOUND=true
-    elif [ -f /usr/lib64/libarrow.so ] || [ -f /usr/lib/libarrow.so ]; then
-        ARROW_FOUND=true
+    # 检查/构建 Arrow
+    if [ ! -f "$ARROW_HOME/lib64/libarrow.so" ] && [ ! -f "$ARROW_HOME/lib/libarrow.so" ] && \
+       ! ldconfig -p 2>/dev/null | grep -q libarrow && \
+       [ ! -f /usr/lib64/libarrow.so ] && [ ! -f /usr/lib/libarrow.so ]; then
+        if [ -f "$ICEBERG_ARROW_DEPS_REPO/build_arrow.sh" ]; then
+            echo "Apache Arrow C++ 未安装，自动构建..."
+            echo "  ARROW_HOME=$ARROW_HOME"
+            # cmake 需系统 libstdc++，不能用 GCC10 的
+            env CC="$GCC_HOME/bin/gcc" CXX="$GCC_HOME/bin/g++" \
+                LD_LIBRARY_PATH="$GCTOOLS/isl/lib:$GCTOOLS/mpc/lib:$GCTOOLS/mpfr/lib:$GCTOOLS/gmp/lib" \
+                bash "$ICEBERG_ARROW_DEPS_REPO/build_arrow.sh"
+            [ -f "$ARROW_HOME/lib64/libarrow.so" ] || [ -f "$ARROW_HOME/lib/libarrow.so" ] || \
+                error "Arrow 构建完成但未找到 libarrow.so"
+        else
+            warn "跳过 iceberg_delta：iceberg-arrow-deps 仓库未克隆且 Arrow 未安装"
+            echo "  (不影响其他组件运行)"
+            return 0  # skip this if-block, continue to "iceberg_delta OK"
+        fi
     fi
-    if ! $ARROW_FOUND; then
-        warn "跳过 iceberg_delta：Apache Arrow C++ 未安装"
-        echo "  安装 Arrow 后可手动编译: bash build.sh delta"
-        echo "  (不影响其他组件运行)"
-    else
     echo "building iceberg_delta..."
     DELTA_BUILD="$ICEBERG_DELTA_REPO/tmp_build_gcc10"
     configure_needed=false
@@ -522,7 +530,9 @@ if skip_or_rebuild "iceberg_delta" "$GAUSSHOME/lib/postgresql/iceberg_delta.so" 
         cmake "$ICEBERG_DELTA_REPO" \
             -DCMAKE_BUILD_TYPE="$cmake_build_type" \
             -DGAUSS_SRC="$OPENGAUSS_REPO" \
-            -DICEBERG_CATALOG_INCLUDE="$ICEBERG_CATALOG_REPO/src/include" 2>&1
+            -DICEBERG_CATALOG_INCLUDE="$ICEBERG_CATALOG_REPO/src/include" \
+            -DARROW_HOME="$ARROW_HOME" \
+            -DICEBERG_RUST_BRIDGE_HOME="$ICEBERG_BRIDGE_REPO" 2>&1
         cmake --build . --parallel "$BUILD_JOBS" 2>&1
     else
         cd "$DELTA_BUILD"
@@ -533,7 +543,6 @@ if skip_or_rebuild "iceberg_delta" "$GAUSSHOME/lib/postgresql/iceberg_delta.so" 
     cp "$ICEBERG_DELTA_REPO/iceberg_delta.control" "$GAUSSHOME/share/postgresql/extension/"
     cp "$ICEBERG_DELTA_REPO/iceberg_delta--1.0.0.sql" "$GAUSSHOME/share/postgresql/extension/"
     echo "$BUILD_MODE" > "$GAUSSHOME/lib/postgresql/iceberg_delta.so.build_mode"
-    fi  # end Arrow check
 fi
 echo "iceberg_delta OK"
 

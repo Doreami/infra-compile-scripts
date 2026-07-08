@@ -481,8 +481,22 @@ if skip_or_rebuild "iceberg_catalog" "$GAUSSHOME/lib/postgresql/iceberg_catalog.
 fi
 echo "iceberg_catalog OK"
 
-# 8d. iceberg_delta (cmake)
+# 8d. iceberg_delta (cmake) — 可选：需要 Apache Arrow
 if skip_or_rebuild "iceberg_delta" "$GAUSSHOME/lib/postgresql/iceberg_delta.so" "iceberg_delta" "openGauss-server-datainfra" "openGauss-Catalog"; then
+    # 检查 Arrow 是否可用
+    ARROW_FOUND=false
+    if [ -n "${ARROW_HOME:-}" ] && [ -f "$ARROW_HOME/lib64/libarrow.so" -o -f "$ARROW_HOME/lib/libarrow.so" ]; then
+        ARROW_FOUND=true
+    elif ldconfig -p 2>/dev/null | grep -q libarrow; then
+        ARROW_FOUND=true
+    elif [ -f /usr/lib64/libarrow.so ] || [ -f /usr/lib/libarrow.so ]; then
+        ARROW_FOUND=true
+    fi
+    if ! $ARROW_FOUND; then
+        warn "跳过 iceberg_delta：Apache Arrow C++ 未安装"
+        echo "  安装 Arrow 后可手动编译: bash build.sh delta"
+        echo "  (不影响其他组件运行)"
+    else
     echo "building iceberg_delta..."
     DELTA_BUILD="$ICEBERG_DELTA_REPO/tmp_build_gcc10"
     configure_needed=false
@@ -519,6 +533,7 @@ if skip_or_rebuild "iceberg_delta" "$GAUSSHOME/lib/postgresql/iceberg_delta.so" 
     cp "$ICEBERG_DELTA_REPO/iceberg_delta.control" "$GAUSSHOME/share/postgresql/extension/"
     cp "$ICEBERG_DELTA_REPO/iceberg_delta--1.0.0.sql" "$GAUSSHOME/share/postgresql/extension/"
     echo "$BUILD_MODE" > "$GAUSSHOME/lib/postgresql/iceberg_delta.so.build_mode"
+    fi  # end Arrow check
 fi
 echo "iceberg_delta OK"
 

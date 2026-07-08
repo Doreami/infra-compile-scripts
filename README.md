@@ -11,9 +11,6 @@ passwd test_user
 ```sh
 git clone git@github.com:Doreami/infra-compile-scripts.git
 cd infra-compile-scripts
-git lfs pull
-# 仅 minio 二进制需要 lfs pull（约 100MB），binarylibs 已改用自动下载
-
 ```
 
 # 3. Github配置token

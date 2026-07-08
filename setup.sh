@@ -495,7 +495,7 @@ if skip_or_rebuild "iceberg_delta" "$GAUSSHOME/lib/postgresql/iceberg_delta.so" 
             echo "  ARROW_HOME=$ARROW_HOME"
             # cmake 需系统 libstdc++，不能用 GCC10 的
             env CC="$GCC_HOME/bin/gcc" CXX="$GCC_HOME/bin/g++" \
-                LD_LIBRARY_PATH="$GCTOOLS/isl/lib:$GCTOOLS/mpc/lib:$GCTOOLS/mpfr/lib:$GCTOOLS/gmp/lib" \
+                LD_LIBRARY_PATH="/usr/lib64:/lib64:$GCTOOLS/isl/lib:$GCTOOLS/mpc/lib:$GCTOOLS/mpfr/lib:$GCTOOLS/gmp/lib" \
                 bash "$ICEBERG_ARROW_DEPS_REPO/build_arrow.sh"
             [ -f "$ARROW_HOME/lib64/libarrow.so" ] || [ -f "$ARROW_HOME/lib/libarrow.so" ] || \
                 error "Arrow 构建完成但未找到 libarrow.so"

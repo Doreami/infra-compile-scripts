@@ -411,7 +411,7 @@ build_delta() {
         if [ -f "$ICEBERG_ARROW_DEPS_REPO/build_arrow.sh" ]; then
             info "Apache Arrow C++ 未安装，自动构建..."
             env CC="$GCC_HOME/bin/gcc" CXX="$GCC_HOME/bin/g++" \
-                LD_LIBRARY_PATH="$GCTOOLS/isl/lib:$GCTOOLS/mpc/lib:$GCTOOLS/mpfr/lib:$GCTOOLS/gmp/lib" \
+                LD_LIBRARY_PATH="/usr/lib64:/lib64:$GCTOOLS/isl/lib:$GCTOOLS/mpc/lib:$GCTOOLS/mpfr/lib:$GCTOOLS/gmp/lib" \
                 bash "$ICEBERG_ARROW_DEPS_REPO/build_arrow.sh"
         else
             error "Arrow 未安装且 iceberg-arrow-deps 仓库未克隆。请先安装 Arrow 或克隆 arrow-deps 仓库"

@@ -64,6 +64,7 @@ ICEBERG_CATALOG_REPO="$ICEBERG_OG_ROOT/openGauss-Catalog"
 ICEBERG_DELTA_REPO="$ICEBERG_OG_ROOT/iceberg_delta"
 ICEBERG_RUST_DATAINFRA_REPO="$ICEBERG_OG_ROOT/iceberg-rust-datainfra"
 ICEBERG_ARROW_DEPS_REPO="$ICEBERG_OG_ROOT/iceberg-arrow-deps"
+ICEBERG_RUST_CACHE_REPO="$ICEBERG_OG_ROOT/iceberg-rust-cache"
 ARROW_HOME="${ARROW_HOME:-$ICEBERG_OG_ROOT/arrow_install}"
 # build.sh 硬编码安装到 mppdb_temp_install，不做额外处理
 GAUSSHOME="$OPENGAUSS_REPO/mppdb_temp_install"
@@ -245,6 +246,7 @@ REPOS=(
     "iceberg_delta:$ICEBERG_DELTA_BRANCH:$ICEBERG_DELTA_REPO_URL"
     "iceberg-rust-datainfra:$ICEBERG_RUST_DATAINFRA_BRANCH:$ICEBERG_RUST_DATAINFRA_REPO_URL"
     "iceberg-arrow-deps:$ICEBERG_ARROW_DEPS_BRANCH:$ICEBERG_ARROW_DEPS_REPO_URL"
+    "iceberg-rust-cache:$ICEBERG_RUST_CACHE_BRANCH:$ICEBERG_RUST_CACHE_REPO_URL"
 )
 for entry in "${REPOS[@]}"; do
     IFS=':' read -r d b u <<< "$entry"

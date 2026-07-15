@@ -160,10 +160,12 @@ def run_gsql(gsql_cmd: str, sql: str):
         tmp = f.name
     try:
         r = subprocess.run(f"{gsql_cmd} -f {tmp}", shell=True, capture_output=True, text=True, timeout=30)
-        if r.returncode != 0:
-            print(f"[gsql ERROR]\n{r.stderr}")
         if r.stdout:
             print(r.stdout)
+        if r.stderr:
+            print(f"[gsql ERROR]\n{r.stderr}")
+        if r.returncode != 0:
+            raise RuntimeError(f"gsql 执行失败 (exit={r.returncode})")
     finally:
         os.unlink(tmp)
 

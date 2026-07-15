@@ -12,3 +12,4 @@ target/
 .idea/
 *.swp
 Thumbs.db
+端到端性能测试/

@@ -71,6 +71,7 @@ ICEBERG_CATALOG_REPO="$ICEBERG_OG_ROOT/openGauss-Catalog"
 ICEBERG_DELTA_REPO="$ICEBERG_OG_ROOT/iceberg_delta"
 ICEBERG_RUST_DATAINFRA_REPO="$ICEBERG_OG_ROOT/iceberg-rust-datainfra"
 ICEBERG_ARROW_DEPS_REPO="$ICEBERG_OG_ROOT/iceberg-arrow-deps"
+ICEBERG_RUST_CACHE_REPO="$ICEBERG_OG_ROOT/iceberg-rust-cache"
 ARROW_HOME="${ARROW_HOME:-$ICEBERG_OG_ROOT/arrow_install}"
 GAUSSHOME="$OPENGAUSS_REPO/mppdb_temp_install"
 
@@ -102,6 +103,17 @@ check_file() {
     if [ ! -e "$path" ]; then
         error "$desc 不存在: $path"
     fi
+}
+
+# 确保依赖仓存在，缺失则自动 clone
+ensure_repo() {
+    local repo_path="$1" repo_label="$2" branch_var="$3" url_var="$4"
+    if [ -d "$repo_path" ]; then
+        return 0
+    fi
+    local branch="${!branch_var}" url="${!url_var}"
+    info "自动 clone 依赖仓: $repo_label ($branch)"
+    git clone -b "$branch" "$url" "$repo_path" || error "clone $repo_label 失败: $url"
 }
 
 # ============================================================
@@ -248,7 +260,7 @@ build_index() {
     step "cargo check iceberg-index"
 
     setup_rust
-    check_file "iceberg-index 源码" "$ICEBERG_INDEX_REPO/Cargo.toml"
+    ensure_repo "$ICEBERG_INDEX_REPO" "iceberg-index" "ICEBERG_INDEX_BRANCH" "ICEBERG_INDEX_REPO_URL"
 
     if $PULL_BEFORE_BUILD; then
         info "git pull iceberg-index ($ICEBERG_INDEX_BRANCH)"
@@ -269,12 +281,15 @@ build_bridge() {
     $FORCE_REBUILD && info "--force: cargo clean + 全量重编"
 
     setup_rust
-    check_file "iceberg-index 源码" "$ICEBERG_INDEX_REPO/Cargo.toml"
-    check_file "iceberg-rust-bridge 源码" "$ICEBERG_BRIDGE_REPO/Cargo.toml"
+    ensure_repo "$ICEBERG_INDEX_REPO" "iceberg-index" "ICEBERG_INDEX_BRANCH" "ICEBERG_INDEX_REPO_URL"
+    ensure_repo "$ICEBERG_RUST_CACHE_REPO" "iceberg-rust-cache" "ICEBERG_RUST_CACHE_BRANCH" "ICEBERG_RUST_CACHE_REPO_URL"
+    ensure_repo "$ICEBERG_BRIDGE_REPO" "iceberg-rust-bridge" "ICEBERG_BRIDGE_BRANCH" "ICEBERG_BRIDGE_REPO_URL"
 
     if $PULL_BEFORE_BUILD; then
         info "git pull iceberg-index ($ICEBERG_INDEX_BRANCH)"
         (cd "$ICEBERG_INDEX_REPO" && git fetch origin && git checkout "$ICEBERG_INDEX_BRANCH" && git pull origin "$ICEBERG_INDEX_BRANCH") || warn "iceberg-index pull failed"
+        info "git pull iceberg-rust-cache ($ICEBERG_RUST_CACHE_BRANCH)"
+        (cd "$ICEBERG_RUST_CACHE_REPO" && git fetch origin && git checkout "$ICEBERG_RUST_CACHE_BRANCH" && git pull origin "$ICEBERG_RUST_CACHE_BRANCH") || warn "iceberg-rust-cache pull failed"
         info "git pull iceberg-rust-bridge ($ICEBERG_BRIDGE_BRANCH)"
         (cd "$ICEBERG_BRIDGE_REPO" && git fetch origin && git checkout "$ICEBERG_BRIDGE_BRANCH" && git pull origin "$ICEBERG_BRIDGE_BRANCH") || warn "iceberg-rust-bridge pull failed"
     fi
@@ -311,7 +326,7 @@ build_fdw() {
     $FORCE_REBUILD && info "--force: make clean + 全量重编"
 
     check_file "GAUSSHOME (pg_config)" "$GAUSSHOME/bin/pg_config"
-    check_file "iceberg_fdw 源码" "$ICEBERG_FDW_REPO/Makefile"
+    ensure_repo "$ICEBERG_FDW_REPO" "iceberg_fdw" "ICEBERG_FDW_BRANCH" "ICEBERG_FDW_REPO_URL"
 
     if $PULL_BEFORE_BUILD; then
         info "git pull iceberg_fdw ($ICEBERG_FDW_BRANCH)"
@@ -353,7 +368,7 @@ build_catalog() {
     check_file "GAUSSHOME (pg_config)" "$GAUSSHOME/bin/pg_config"
     check_file "bridge .so" "$BRIDGE_SO"
     check_file "bridge header" "$BRIDGE_HEADER"
-    check_file "openGauss-Catalog 源码" "$ICEBERG_CATALOG_REPO/Makefile"
+    ensure_repo "$ICEBERG_CATALOG_REPO" "openGauss-Catalog" "ICEBERG_CATALOG_BRANCH" "ICEBERG_CATALOG_REPO_URL"
 
     if $PULL_BEFORE_BUILD; then
         info "git pull openGauss-Catalog ($ICEBERG_CATALOG_BRANCH)"
@@ -395,7 +410,7 @@ build_delta() {
 
     check_file "GAUSSHOME (pg_config)" "$GAUSSHOME/bin/pg_config"
     check_file "catalog header" "$ICEBERG_CATALOG_REPO/src/include/iceberg_catalog.h"
-    check_file "iceberg_delta 源码" "$ICEBERG_DELTA_REPO/CMakeLists.txt"
+    ensure_repo "$ICEBERG_DELTA_REPO" "iceberg_delta" "ICEBERG_DELTA_BRANCH" "ICEBERG_DELTA_REPO_URL"
     export ICEBERG_RUST_BRIDGE_HOME="${ICEBERG_RUST_BRIDGE_HOME:-$ICEBERG_BRIDGE_REPO}"
 
     # 检查/构建 Arrow

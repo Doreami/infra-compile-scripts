@@ -39,17 +39,26 @@ GITHUB_ORG="your_username"
 # ICEBERG_FDW_REPO_URL="https://github.com/your_fork/iceberg_fdw.git"
 ```
 
+其他可配变量（一般无需修改）：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `BUILD_MODE` | `debug` | 编译模式: debug / release |
+| `BUILD_JOBS` | `8` | 编译并发数 |
+| `*_BRANCH` (9 个) | 各仓默认分支 | `--pull` 时使用的目标分支 |
+| `RUSTUP_DIST_SERVER` | `rsproxy.cn` | Rust 工具链下载镜像 |
+
 # 5. 执行一键搭建脚本
 
 ```shell
 # 途中ssh有可能会被断开
-# 首次运行 → 全量编译
+# 首次运行 → 全量编译（clone 仓库 + 编译全家桶）
 # 再次运行 → 检测已有产物自动跳过
-sh setup.sh
+bash setup.sh
 
 # 可选参数：
 --force             # 全量重编（make clean / cargo clean 后编译）
---skip-update       # 不拉代码，编译已有产物（选中的仓有产物就跳过）
+--skip-update       # 不拉代码，不 clone 不存在的仓库，仅编译
 --debug             # 全链路 debug（默认）
 --release           # 全链路 release
 
@@ -57,6 +66,7 @@ sh setup.sh
 # opengauss 仓仅支持全量编译 (通过检查二进制来判断是否要重编)
 # 其他仓不加 --force 走增量编译（cargo build / make / cmake --build 自带增量检测）
 # 加 --force 会先 clean 再全量编译
+# 注意: setup.sh 不支持 --help，查看帮助用 build.sh --help
 ┌────────────────────────────────┬────────┬──────┐
 │                                │ 拉代码  │ 编译  │
 ├────────────────────────────────┼────────┼──────┤
@@ -70,12 +80,13 @@ sh setup.sh
 └────────────────────────────────┴────────┴──────┘
 ```
 
-### 5b. 单独编译某个仓
+### 5b. 单独编译某个仓（无需 setup.sh，可直接使用）
 
-首次 `setup.sh` 全量搭建之后，日常开发只需重编改动的仓：
+首次搭建也可跳过 `setup.sh`，用 `build.sh` 逐个编译（需提前 clone 好仓库和 binarylibs）：
 
 ```shell
 bash build.sh <目标> [--release|--debug] [--force] [--pull]
+bash build.sh --help    # 查看完整帮助
 
 # 目标:
 #   opengauss  - openGauss 数据库（30-60 分钟，全量；产物存在则跳过）
@@ -83,7 +94,7 @@ bash build.sh <目标> [--release|--debug] [--force] [--pull]
 #   fdw        - iceberg_fdw（依赖 openGauss）
 #   catalog    - openGauss-Catalog（依赖 openGauss + bridge）
 #   delta      - iceberg_delta（依赖 openGauss + catalog）
-#   index      - cargo check（仅 Rust 语法检查）
+#   index      - cargo check iceberg-index（仅 Rust 语法检查）
 
 # 示例:
 bash build.sh fdw                  # 增量编译

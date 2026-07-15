@@ -418,13 +418,7 @@ if skip_or_rebuild "iceberg-rust-bridge" "$BRIDGE_SO" "iceberg-rust-bridge" "ice
     if $FORCE_REBUILD; then
         cargo clean 2>&1
     fi
-    cargo build $cargo_flags \
-    --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-abi.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-abi\"" \
-    --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-core.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-core\"" \
-    --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-iceberg.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-iceberg\"" \
-    --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-plugins.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-plugins\"" \
-    --config "patch.\"${ICEBERG_INDEX_CARGO_URL}\".iceberg-index-runtime.path=\"${ICEBERG_INDEX_REPO}/crates/iceberg-index-runtime\"" \
-    2>&1
+    cargo build $cargo_flags 2>&1
 
     ls -lh "$BRIDGE_SO"
     echo "$BUILD_MODE" > "${BRIDGE_SO}.build_mode"

@@ -198,10 +198,14 @@ check_binarylibs() {
 }
 
 install_bridge_to_gausshome() {
+    local dest="$GAUSSHOME/lib/postgresql/libiceberg_rust_bridge.so"
     if [ -d "$GAUSSHOME/lib/postgresql" ]; then
-        info "安装 bridge .so 到 GAUSSHOME..."
         ensure_dir "$GAUSSHOME/lib/postgresql"
-        cp "$BRIDGE_SO" "$GAUSSHOME/lib/postgresql/libiceberg_rust_bridge.so"
+        cp "$BRIDGE_SO" "$dest"
+        info "libiceberg_rust_bridge.so → $dest ($(ls -lh "$dest" | awk '{print $5}'))"
+    else
+        warn "GAUSSHOME 不存在 ($GAUSSHOME)，跳过安装（先编译 openGauss）"
+        info "产物位置: $BRIDGE_SO"
     fi
 }
 
@@ -250,6 +254,14 @@ build_opengauss() {
 
     "$GAUSSHOME/bin/gsql" --version 2>&1 || error "openGauss 编译验证失败"
     info "openGauss 编译完成 — $(ls -lh $GAUSSHOME/bin/gaussdb | awk '{print $5}')"
+
+    # 生成/更新 opengauss.env
+    cat > "$ICEBERG_OG_ROOT/opengauss.env" << EOF
+#!/bin/bash
+export GAUSSHOME="\${GAUSSHOME:-$GAUSSHOME}"
+echo "opengauss.env loaded: GAUSSHOME=\${GAUSSHOME}"
+EOF
+    info "环境文件已更新: source $ICEBERG_OG_ROOT/opengauss.env"
 }
 
 # ============================================================
@@ -314,7 +326,7 @@ build_bridge() {
     ls -lh "$BRIDGE_SO"
 
     install_bridge_to_gausshome
-    info "bridge 编译完成"
+    info "bridge 编译完成: $BRIDGE_SO ($(ls -lh "$BRIDGE_SO" | awk '{print $5}'))"
 }
 
 # ============================================================
@@ -354,7 +366,7 @@ build_fdw() {
     cp iceberg_fdw--0.1.0.sql "$GAUSSHOME/share/postgresql/extension/"
     echo "$BUILD_MODE" > "$GAUSSHOME/lib/postgresql/iceberg_fdw.so.build_mode"
 
-    info "iceberg_fdw 编译完成"
+    info "iceberg_fdw 编译完成: $GAUSSHOME/lib/postgresql/iceberg_fdw.so"
 }
 
 # ============================================================
@@ -366,8 +378,8 @@ build_catalog() {
     $FORCE_REBUILD && info "--force: make clean + 全量重编"
 
     check_file "GAUSSHOME (pg_config)" "$GAUSSHOME/bin/pg_config"
-    check_file "bridge .so" "$BRIDGE_SO"
-    check_file "bridge header" "$BRIDGE_HEADER"
+    check_file "libiceberg_rust_bridge.so" "$BRIDGE_SO"
+    check_file "iceberg_bridge.h" "$BRIDGE_HEADER"
     ensure_repo "$ICEBERG_CATALOG_REPO" "openGauss-Catalog" "ICEBERG_CATALOG_BRANCH" "ICEBERG_CATALOG_REPO_URL"
 
     if $PULL_BEFORE_BUILD; then
@@ -398,7 +410,7 @@ build_catalog() {
     cp iceberg_catalog--1.0.0.sql "$GAUSSHOME/share/postgresql/extension/"
     echo "$BUILD_MODE" > "$GAUSSHOME/lib/postgresql/iceberg_catalog.so.build_mode"
 
-    info "iceberg_catalog 编译完成"
+    info "iceberg_catalog 编译完成: $GAUSSHOME/lib/postgresql/iceberg_catalog.so"
 }
 
 # ============================================================
@@ -478,7 +490,7 @@ build_delta() {
     cp "$ICEBERG_DELTA_REPO/iceberg_delta--1.0.0.sql" "$GAUSSHOME/share/postgresql/extension/"
     echo "$BUILD_MODE" > "$GAUSSHOME/lib/postgresql/iceberg_delta.so.build_mode"
 
-    info "iceberg_delta 编译完成"
+    info "iceberg_delta 编译完成: $GAUSSHOME/lib/postgresql/iceberg_delta.so"
 }
 
 # ============================================================

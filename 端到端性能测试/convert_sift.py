@@ -64,7 +64,7 @@ def main():
     # 2. Write parquet files to warehouse
     parquet_dir = os.path.join(
         os.path.expanduser(args.warehouse),
-        f"{args.namespace}.db",
+        f"{args.namespace}",
         args.table,
         "data",
     )
@@ -73,7 +73,7 @@ def main():
     # Build Arrow schema: id (int64) + vec (list<float>)
     schema = pa.schema([
         pa.field("id", pa.int64(), nullable=False),
-        pa.field("vec", pa.list_(pa.float32()), nullable=False),
+        pa.field("vec", pa.list_(pa.field("element", pa.float32(), nullable=False)), nullable=False),
     ])
 
     print(f"Writing {n} rows to {parquet_dir} ...")
@@ -102,7 +102,7 @@ def main():
                                  "sift_queries.parquet")
         query_schema = pa.schema([
             pa.field("qid", pa.int32(), nullable=False),
-            pa.field("vec", pa.list_(pa.float32()), nullable=False),
+            pa.field("vec", pa.list_(pa.field("element", pa.float32(), nullable=False)), nullable=False),
         ])
         query_ids = list(range(nq))
         query_vecs = [queries[i].tolist() for i in range(nq)]

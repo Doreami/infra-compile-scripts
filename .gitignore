@@ -12,4 +12,5 @@ target/
 .idea/
 *.swp
 Thumbs.db
-端到端性能测试/
+# 火焰图原始 perf 数据（二进制，体积大）
+端到端性能测试/*/flamegraphs/perf_data/

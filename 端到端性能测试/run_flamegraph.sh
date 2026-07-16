@@ -85,6 +85,9 @@ run_perf() {
     # 启动 perf record
     log "  启动 perf record (PID=$GAUSSDB_PID)..."
     perf record -F 99 -g -p "$GAUSSDB_PID" -o "$perf_data" -- sleep 99999 &
+# 注意: 要求编译时保留帧指针，否则调用栈会错乱
+#   bridge: RUSTFLAGS="-C force-frame-pointers=yes"
+#   gaussdb: CFLAGS="-fno-omit-frame-pointer"
     local PERF_PID=$!
     sleep 1.5
 

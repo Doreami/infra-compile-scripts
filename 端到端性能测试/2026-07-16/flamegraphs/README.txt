@@ -2,7 +2,7 @@
 ==============
 Date: 2026-07-16
 Run: 2026-07-16
-gaussdb PID: 642771
+gaussdb PID: 2041277
 Kernel: 6.6.0-28.0.0.34.oe2403.x86_64
 Commit: unknown
 Query Vector: id=500000 (SIFT1M)

@@ -386,6 +386,8 @@ if skip_or_rebuild "openGauss" "$GAUSSHOME/bin/gaussdb" "openGauss-server-datain
     rm -rf tmp_build "$GAUSSHOME" 2>/dev/null || true
 
     echo "Log: $(date) | tail -f $HOME/og-build.log"
+    export CFLAGS="-fno-omit-frame-pointer"
+    export CXXFLAGS="-fno-omit-frame-pointer"
     sh build.sh -m "$BUILD_MODE" -3rd "$BINARYLIBS_DIR" 2>&1 | tee "$HOME/og-build.log"
 
     make -j1 2>&1 | tee -a "$HOME/og-build.log"
@@ -420,6 +422,7 @@ if skip_or_rebuild "iceberg-rust-bridge" "$BRIDGE_SO" "iceberg-rust-bridge" "ice
     if $FORCE_REBUILD; then
         cargo clean 2>&1
     fi
+    export RUSTFLAGS="-C force-frame-pointers=yes"  # perf -g 火焰图需要帧指针
     cargo build $cargo_flags 2>&1
 
     ls -lh "$BRIDGE_SO"

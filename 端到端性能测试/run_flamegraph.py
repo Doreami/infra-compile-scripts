@@ -89,10 +89,8 @@ if __name__ == "__main__":
     parser.add_argument("--dataset", required=True, choices=list(DATASETS))
     parser.add_argument("--namespace", required=True)
     parser.add_argument("--table", required=True)
-    parser.add_argument("--scenarios", default="ivf_k10,fullscan_k10",
-                        help="comma-separated: ivf_k10,fullscan_k10,fullscan_k100,...")
-    parser.add_argument("--rounds-ivf", type=int, default=2)
-    parser.add_argument("--rounds-fullscan", type=int, default=1)
+    parser.add_argument("--scenarios", default="fullscan_k10,fullscan_k100,fullscan_k1000,ivf_k10,ivf_k100,ivf_k10000,btree_point",
+                        help="comma-separated scenario list")
     args = parser.parse_args()
 
     dataset = args.dataset
@@ -100,21 +98,33 @@ if __name__ == "__main__":
     print(f"{dataset.upper()}: dim={DATASETS[dataset]['dim']}")
 
     table = f"{args.namespace}.{args.table}"
-    query = f"SELECT id FROM {table} ORDER BY vec <-> '{qv}'::vector LIMIT 10;"
-
     out_dir = os.path.dirname(os.path.abspath(__file__))
 
-    for scenario in args.scenarios.split(","):
-        scenario = scenario.strip()
-        if scenario.startswith("ivf"):
-            print(f"\n=== {dataset.upper()} IVF K=10 ===")
-            collect("ivf_k10",
-                    "SET enable_vectorsearch = on; SET try_vector_engine_strategy = force;",
-                    query, args.rounds_ivf, out_dir)
-        elif scenario.startswith("fullscan"):
-            print(f"\n=== {dataset.upper()} FullScan K=10 ===")
-            collect("fullscan_k10",
-                    "SET enable_indexscan = off; SET enable_bitmapscan = off; SET enable_vectorsearch = off;",
-                    query, args.rounds_fullscan, out_dir)
+    # Scenario definitions: label, SQL setup, query SQL, rounds
+    SCENARIOS = {
+        "fullscan_k10":   ("fullscan_k10",   "SET enable_indexscan = off; SET enable_bitmapscan = off; SET enable_vectorsearch = off;",
+                          f"SELECT id FROM {table} ORDER BY vec <-> '{qv}'::vector LIMIT 10;",   2),
+        "fullscan_k100":  ("fullscan_k100",  "SET enable_indexscan = off; SET enable_bitmapscan = off; SET enable_vectorsearch = off;",
+                          f"SELECT id FROM {table} ORDER BY vec <-> '{qv}'::vector LIMIT 100;",  2),
+        "fullscan_k1000": ("fullscan_k1000", "SET enable_indexscan = off; SET enable_bitmapscan = off; SET enable_vectorsearch = off;",
+                          f"SELECT id FROM {table} ORDER BY vec <-> '{qv}'::vector LIMIT 1000;", 2),
+        "ivf_k10":        ("ivf_k10",        "SET enable_vectorsearch = on; SET try_vector_engine_strategy = force;",
+                          f"SELECT id FROM {table} ORDER BY vec <-> '{qv}'::vector LIMIT 10;",    5),
+        "ivf_k100":       ("ivf_k100",       "SET enable_vectorsearch = on; SET try_vector_engine_strategy = force;",
+                          f"SELECT id FROM {table} ORDER BY vec <-> '{qv}'::vector LIMIT 100;",   3),
+        "ivf_k10000":     ("ivf_k10000",     "SET enable_vectorsearch = on; SET try_vector_engine_strategy = force;",
+                          f"SELECT id FROM {table} ORDER BY vec <-> '{qv}'::vector LIMIT 10000;", 2),
+        "btree_point":    ("btree_point",    "",
+                          f"SELECT * FROM {table} WHERE id = 500000;",                             60),
+    }
+
+    for name in args.scenarios.split(","):
+        name = name.strip()
+        if name not in SCENARIOS:
+            print(f"  skip unknown scenario: {name}")
+            continue
+        label, setup, query, rounds = SCENARIOS[name]
+        print(f"\n=== {dataset.upper()} {label} ({rounds} rounds) ===")
+        collect(label, setup, query, rounds, out_dir)
 
     print("\nDone.")

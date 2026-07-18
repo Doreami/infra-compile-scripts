@@ -15,7 +15,7 @@ DATASETS = {
 }
 
 # ── 路径 ──
-GSQL = os.path.expanduser("~/iceberg-og/openGauss-server-datainfra/mppdb_temp_install/bin/gsql")
+GSQL = "gsql"
 DATA_DIR = os.path.expanduser("~/测试文件")
 STACK = os.path.expanduser("~/FlameGraph/stackcollapse-perf.pl")
 FLAME = os.path.expanduser("~/FlameGraph/flamegraph.pl")

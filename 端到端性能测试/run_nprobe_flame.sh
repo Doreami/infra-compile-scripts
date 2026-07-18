@@ -2,10 +2,7 @@
 # nprobe=1 vs 32 火焰图对比
 set -uo pipefail
 
-source ~/iceberg-og/opengauss.env
-export PATH="$GAUSSHOME/bin:$PATH"
-
-GSQL="$GAUSSHOME/bin/gsql -d postgres -p 37000"
+GSQL="gsql -d postgres -p 37000"
 FLAMEGRAPH_DIR=~/FlameGraph
 STACK="$FLAMEGRAPH_DIR/stackcollapse-perf.pl"
 FLAME="$FLAMEGRAPH_DIR/flamegraph.pl"

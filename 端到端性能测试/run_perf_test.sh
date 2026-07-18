@@ -5,7 +5,6 @@
 # ============================================================
 set -euo pipefail
 
-source ~/iceberg-og/opengauss.env
 GSQL="gsql -d postgres -p 37000"
 WAREHOUSE=~/warehouse
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

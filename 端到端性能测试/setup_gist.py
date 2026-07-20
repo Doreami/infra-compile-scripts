@@ -107,8 +107,8 @@ def main():
 
     print("\n=== Done! ===")
     print(f"Next: SELECT iceberg_catalog.create_index('{args.namespace}', '{args.table}',"
-          f" 'idx_ivf_vec', '[\"vec\"]'::jsonb, 'ivf_flat', 'ivf',"
-          f" '{{\"num_clusters\":1024, \"sample_rate\":100000}}'::jsonb);")
+          f" 'idx_ivf_pq_vec', '[\"vec\"]'::jsonb, 'ivf_pq', 'ivf',"
+          f" '{{\"vector_column\":\"vec\",\"num_clusters\":1024,\"sample_rate\":100000}}'::jsonb);")
 
 if __name__ == "__main__":
     main()

@@ -116,6 +116,12 @@ if __name__ == "__main__":
                           f"SELECT id FROM {table} ORDER BY vec <-> '{qv}'::vector LIMIT 10000;", 2),
         "btree_point":    ("btree_point",    "",
                           f"SELECT * FROM {table} WHERE id = 500000;",                             60),
+        "ivf_k10_dop8":  ("ivf_k10_dop8",  "SET query_dop = 8; SET enable_vectorsearch = on; SET try_vector_engine_strategy = force;",
+                          f"SELECT id FROM {table} ORDER BY vec <-> '{qv}'::vector LIMIT 10;",    5),
+        "ivf_k100_dop8": ("ivf_k100_dop8", "SET query_dop = 8; SET enable_vectorsearch = on; SET try_vector_engine_strategy = force;",
+                          f"SELECT id FROM {table} ORDER BY vec <-> '{qv}'::vector LIMIT 100;",   3),
+        "fullscan_k10_dop8": ("fullscan_k10_dop8", "SET query_dop = 8; SET enable_indexscan = off; SET enable_bitmapscan = off; SET enable_vectorsearch = off;",
+                          f"SELECT id FROM {table} ORDER BY vec <-> '{qv}'::vector LIMIT 10;",   2),
     }
 
     for name in args.scenarios.split(","):

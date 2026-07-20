@@ -298,6 +298,7 @@ build_bridge() {
     ensure_repo "$ICEBERG_INDEX_REPO" "iceberg-index" "ICEBERG_INDEX_BRANCH" "ICEBERG_INDEX_REPO_URL"
     ensure_repo "$ICEBERG_RUST_CACHE_REPO" "iceberg-rust-cache" "ICEBERG_RUST_CACHE_BRANCH" "ICEBERG_RUST_CACHE_REPO_URL"
     ensure_repo "$ICEBERG_BRIDGE_REPO" "iceberg-rust-bridge" "ICEBERG_BRIDGE_BRANCH" "ICEBERG_BRIDGE_REPO_URL"
+    ensure_repo "$ICEBERG_RUST_DATAINFRA_REPO" "iceberg-rust-datainfra" "ICEBERG_RUST_DATAINFRA_BRANCH" "ICEBERG_RUST_DATAINFRA_REPO_URL"
 
     if $PULL_BEFORE_BUILD; then
         info "git pull iceberg-index ($ICEBERG_INDEX_BRANCH)"
@@ -306,6 +307,8 @@ build_bridge() {
         (cd "$ICEBERG_RUST_CACHE_REPO" && git fetch origin && git checkout "$ICEBERG_RUST_CACHE_BRANCH" && git pull origin "$ICEBERG_RUST_CACHE_BRANCH") || warn "iceberg-rust-cache pull failed"
         info "git pull iceberg-rust-bridge ($ICEBERG_BRIDGE_BRANCH)"
         (cd "$ICEBERG_BRIDGE_REPO" && git fetch origin && git checkout "$ICEBERG_BRIDGE_BRANCH" && git pull origin "$ICEBERG_BRIDGE_BRANCH") || warn "iceberg-rust-bridge pull failed"
+        info "git pull iceberg-rust-datainfra ($ICEBERG_RUST_DATAINFRA_BRANCH)"
+        (cd "$ICEBERG_RUST_DATAINFRA_REPO" && git fetch origin && git checkout "$ICEBERG_RUST_DATAINFRA_BRANCH" && git pull origin "$ICEBERG_RUST_DATAINFRA_BRANCH") || warn "iceberg-rust-datainfra pull failed"
     fi
 
     export LD_LIBRARY_PATH=

@@ -41,20 +41,27 @@ def main():
     p.add_argument("--namespace", default=None)
     p.add_argument("--table", default=None)
     p.add_argument("--chunk-size", type=int, default=50000)
+    p.add_argument("--partition-buckets", type=int, default=0,
+                   help="Bucket partition count (0 = no partitioning). "
+                        "Creates partitioned table for parallel query testing.")
     args = p.parse_args()
 
-    # Auto-detect format
+    # Auto-detect format and partition suffix
+    part_buckets = args.partition_buckets
+    ns_suffix = "_part" if part_buckets > 0 else ""
+    tbl_suffix = "_part" if part_buckets > 0 else ""
+
     fn = os.path.basename(args.input).lower()
     if fn.endswith(".hdf5") or fn.endswith(".h5"):
         fmt = "hdf5"
         dataset = "gist" if "gist" in fn else "dataset"
-        if args.namespace is None: args.namespace = f"{dataset}_ns"
-        if args.table is None: args.table = f"{dataset}1m"
+        if args.namespace is None: args.namespace = f"{dataset}_ns{ns_suffix}"
+        if args.table is None: args.table = f"{dataset}1m{tbl_suffix}"
     elif fn.endswith(".fvecs"):
         fmt = "fvecs"
         dataset = "sift" if "sift" in fn else "dataset"
-        if args.namespace is None: args.namespace = f"{dataset}_ns"
-        if args.table is None: args.table = f"{dataset}1m"
+        if args.namespace is None: args.namespace = f"{dataset}_ns{ns_suffix}"
+        if args.table is None: args.table = f"{dataset}1m{tbl_suffix}"
     else:
         sys.exit(f"Unknown format: {fn}. Expected .hdf5 or .fvecs")
 
@@ -115,10 +122,25 @@ def main():
         shutil.rmtree(wh_path)
 
     table_loc = f"file://{warehouse}/{args.namespace}/{args.table}"
+
+    # Build partition spec if requested
+    part_spec_json = "NULL"
+    if part_buckets > 0:
+        part_spec = {
+            "spec-id": 0,
+            "fields": [{
+                "source-id": 1,
+                "field-id": 1000,
+                "name": "id_bucket",
+                "transform": f"bucket[{part_buckets}]"
+            }]
+        }
+        part_spec_json = "'" + json.dumps(part_spec) + "'::jsonb"
+
     r = gsql_run(
         f"SELECT iceberg_catalog.create_table("
         f"'{args.namespace}', '{args.table}', '{schema_json}'::jsonb,"
-        f"'{table_loc}');",
+        f"'{table_loc}', {part_spec_json});",
         timeout=30)
     if not r.stdout.strip():
         sys.exit(f"create_table returned empty. stderr: {r.stderr.strip()}")
@@ -213,9 +235,16 @@ def main():
     print(f"\n  openGauss count: {r.stdout.strip()}")
 
     print("\n=== Done! ===")
-    print(f"Next: SELECT iceberg_catalog.create_index('{args.namespace}', '{args.table}',"
-          f" 'idx_ivf_vec', '[\"vec\"]'::jsonb, 'ivf_flat', 'ivf',"
-          f" '{{\"num_clusters\":1024, \"sample_rate\":100000}}'::jsonb);")
+    idx_sql = (
+        f"SELECT iceberg_catalog.create_index('{args.namespace}', '{args.table}',"
+        f" 'idx_ivf_pq_vec', '[\"vec\"]'::jsonb, 'ivf_pq', 'ivf',"
+        f" '{{\"vector_column\":\"vec\",\"num_clusters\":1024,\"sample_rate\":100000}}'::jsonb);")
+    print(f"Next: {idx_sql}")
+    if part_buckets > 0:
+        print(f"\nPartitioned table ({part_buckets} buckets). "
+              f"Ready for parallel query testing:")
+        print(f"  python3 bench_parallel.py --dataset {dataset} "
+              f"--namespace {args.namespace} --table {args.table}")
 
 
 if __name__ == "__main__":

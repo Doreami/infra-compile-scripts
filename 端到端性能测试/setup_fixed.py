@@ -44,6 +44,8 @@ def main():
     p.add_argument("--partition-buckets", type=int, default=0,
                    help="Bucket partition count (0 = no partitioning). "
                         "Creates partitioned table for parallel query testing.")
+    p.add_argument("--num-clusters", type=int, default=256,
+                   help="IVFPQ num_clusters for index creation hint (default: 256)")
     args = p.parse_args()
 
     # Auto-detect format and partition suffix
@@ -235,15 +237,20 @@ def main():
     print(f"\n  openGauss count: {r.stdout.strip()}")
 
     print("\n=== Done! ===")
+    nc = args.num_clusters
     idx_sql = (
         f"SELECT iceberg_catalog.create_index('{args.namespace}', '{args.table}',"
         f" 'idx_ivf_pq_vec', '[\"vec\"]'::jsonb, 'ivf_pq', 'ivf',"
-        f" '{{\"vector_column\":\"vec\",\"num_clusters\":1024,\"sample_rate\":100000}}'::jsonb);")
-    print(f"Next: {idx_sql}")
+        f" '{{\"vector_column\":\"vec\",\"num_clusters\":{nc},\"sample_rate\":100000}}'::jsonb);")
+    print(f"Next (IVFPQ, num_clusters={nc}): {idx_sql}")
     if part_buckets > 0:
         print(f"\nPartitioned table ({part_buckets} buckets). "
               f"Ready for parallel query testing:")
         print(f"  python3 bench_parallel.py --dataset {dataset} "
+              f"--namespace {args.namespace} --table {args.table}")
+    else:
+        print(f"\nNon-partitioned table. Ready for serial testing:")
+        print(f"  python3 bench_parallel.py --serial --dataset {dataset} "
               f"--namespace {args.namespace} --table {args.table}")
 
 

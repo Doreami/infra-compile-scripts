@@ -1,9 +1,22 @@
 #!/usr/bin/env python3
 """火焰图采集 — 通用脚本，支持 SIFT1M / GIST1M 等数据集。
 
+支持串行模式（非分区表）和并行模式（分区表 + dop=8）。
+
 用法:
-  python3 run_flamegraph.py --dataset sift --namespace sift_ns --table sift1m
-  python3 run_flamegraph.py --dataset gist --namespace gist_ns --table gist1m
+  # 串行模式 — 非分区表，不含 dop=8 场景
+  python3 run_flamegraph.py --serial --dataset sift --namespace sift_ns --table sift1m
+  python3 run_flamegraph.py --serial --dataset gist --namespace gist_ns --table gist1m
+
+  # 并行模式 — 分区表，包含 dop=8 场景
+  python3 run_flamegraph.py --dataset sift --namespace sift_ns_part --table sift1m_part \
+      --scenarios fullscan_k10,fullscan_k100,ivf_k10,ivf_k100,ivf_k10_dop8,ivf_k100_dop8,fullscan_k10_dop8
+  python3 run_flamegraph.py --dataset gist --namespace gist_ns_part --table gist1m_part \
+      --scenarios fullscan_k10,ivf_k10,ivf_k100,ivf_k10_dop8,ivf_k100_dop8
+
+  # 自定义场景
+  python3 run_flamegraph.py --dataset sift --namespace sift_ns --table sift1m \
+      --scenarios ivf_k10,ivf_k100,btree_point
 """
 import argparse, os, subprocess, sys, time
 
@@ -19,6 +32,14 @@ GSQL = "gsql"
 DATA_DIR = os.path.expanduser("~/测试文件")
 STACK = os.path.expanduser("~/FlameGraph/stackcollapse-perf.pl")
 FLAME = os.path.expanduser("~/FlameGraph/flamegraph.pl")
+
+# ── 默认场景（串行安全，不含 dop=8） ──
+DEFAULT_SERIAL_SCENARIOS = (
+    "fullscan_k10,fullscan_k100,fullscan_k1000,"
+    "ivf_k10,ivf_k100,ivf_k10000,btree_point"
+)
+# 并行模式额外追加的场景
+PARALLEL_EXTRA_SCENARIOS = "ivf_k10_dop8,ivf_k100_dop8,fullscan_k10_dop8"
 
 
 def load_query_vector(dataset):
@@ -44,7 +65,7 @@ def gsql_run(sql, timeout=120):
                           capture_output=True, text=True, timeout=timeout)
 
 
-def collect(label, setup_sql, query_sql, rounds, out_dir):
+def collect(label, setup_sql, query_sql, rounds, out_dir, dataset):
     pid = subprocess.run(["pgrep", "-f", "gaussdb.*37000"], capture_output=True, text=True).stdout.strip()
     today = time.strftime("%Y-%m-%d")
     perf_dir = os.path.join(out_dir, today, "flamegraphs", "perf_data")
@@ -85,12 +106,15 @@ def collect(label, setup_sql, query_sql, rounds, out_dir):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="火焰图采集 — 支持串行/并行模式")
     parser.add_argument("--dataset", required=True, choices=list(DATASETS))
     parser.add_argument("--namespace", required=True)
     parser.add_argument("--table", required=True)
-    parser.add_argument("--scenarios", default="fullscan_k10,fullscan_k100,fullscan_k1000,ivf_k10,ivf_k100,ivf_k10000,btree_point",
-                        help="comma-separated scenario list")
+    parser.add_argument("--serial", action="store_true",
+                        help="串行模式：默认场景不含 *_dop* 并行变体，且自动过滤用户指定场景中的 *_dop*")
+    parser.add_argument("--scenarios", default=None,
+                        help="逗号分隔的场景列表。不指定则根据 --serial 使用默认值")
     args = parser.parse_args()
 
     dataset = args.dataset
@@ -100,7 +124,7 @@ if __name__ == "__main__":
     table = f"{args.namespace}.{args.table}"
     out_dir = os.path.dirname(os.path.abspath(__file__))
 
-    # Scenario definitions: label, SQL setup, query SQL, rounds
+    # ── 场景定义: label, SQL setup, query SQL, rounds ──
     SCENARIOS = {
         "fullscan_k10":   ("fullscan_k10",   "SET enable_indexscan = off; SET enable_bitmapscan = off; SET enable_vectorsearch = off;",
                           f"SELECT id FROM {table} ORDER BY vec <-> '{qv}'::vector LIMIT 10;",   2),
@@ -122,15 +146,51 @@ if __name__ == "__main__":
                           f"SELECT id FROM {table} ORDER BY vec <-> '{qv}'::vector LIMIT 100;",   3),
         "fullscan_k10_dop8": ("fullscan_k10_dop8", "SET query_dop = 8; SET enable_indexscan = off; SET enable_bitmapscan = off; SET enable_vectorsearch = off;",
                           f"SELECT id FROM {table} ORDER BY vec <-> '{qv}'::vector LIMIT 10;",   2),
+        # DOP=4 场景（64 分区最优 DOP）
+        "ivf_k10_dop4":  ("ivf_k10_dop4",  "SET query_dop = 4; SET enable_vectorsearch = on; SET try_vector_engine_strategy = force;",
+                          f"SELECT id FROM {table} ORDER BY vec <-> '{qv}'::vector LIMIT 10;",    5),
+        "ivf_k100_dop4": ("ivf_k100_dop4", "SET query_dop = 4; SET enable_vectorsearch = on; SET try_vector_engine_strategy = force;",
+                          f"SELECT id FROM {table} ORDER BY vec <-> '{qv}'::vector LIMIT 100;",   3),
+        # DOP=64 场景（过度并行退化）
+        "ivf_k10_dop64":  ("ivf_k10_dop64",  "SET query_dop = 64; SET enable_vectorsearch = on; SET try_vector_engine_strategy = force;",
+                          f"SELECT id FROM {table} ORDER BY vec <-> '{qv}'::vector LIMIT 10;",    5),
+        "ivf_k100_dop64": ("ivf_k100_dop64", "SET query_dop = 64; SET enable_vectorsearch = on; SET try_vector_engine_strategy = force;",
+                          f"SELECT id FROM {table} ORDER BY vec <-> '{qv}'::vector LIMIT 100;",   3),
     }
 
-    for name in args.scenarios.split(","):
-        name = name.strip()
+    # ── 解析场景列表 ──
+    if args.scenarios:
+        scenario_names = [s.strip() for s in args.scenarios.split(",")]
+    elif args.serial:
+        scenario_names = [s.strip() for s in DEFAULT_SERIAL_SCENARIOS.split(",")]
+    else:
+        # 默认并行模式：串行场景 + dop=8 场景
+        scenario_names = [s.strip() for s in DEFAULT_SERIAL_SCENARIOS.split(",")]
+        scenario_names += [s.strip() for s in PARALLEL_EXTRA_SCENARIOS.split(",")]
+
+    # 串行模式：过滤掉 dop=8 场景
+    skipped = []
+    if args.serial:
+        filtered = []
+        for name in scenario_names:
+            if "_dop" in name:
+                skipped.append(name)
+            else:
+                filtered.append(name)
+        if skipped:
+            print(f"[serial mode] Skipping parallel DOP scenarios: {', '.join(skipped)}")
+        scenario_names = filtered
+
+    print(f"Scenarios: {', '.join(scenario_names)}")
+    mode = "serial (non-partitioned)" if args.serial else "parallel (partitioned)"
+    print(f"Mode: {mode}")
+
+    for name in scenario_names:
         if name not in SCENARIOS:
             print(f"  skip unknown scenario: {name}")
             continue
         label, setup, query, rounds = SCENARIOS[name]
         print(f"\n=== {dataset.upper()} {label} ({rounds} rounds) ===")
-        collect(label, setup, query, rounds, out_dir)
+        collect(label, setup, query, rounds, out_dir, dataset)
 
     print("\nDone.")

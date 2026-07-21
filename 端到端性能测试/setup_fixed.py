@@ -46,6 +46,10 @@ def main():
                         "Creates partitioned table for parallel query testing.")
     p.add_argument("--num-clusters", type=int, default=256,
                    help="IVFPQ num_clusters for index creation hint (default: 256)")
+    p.add_argument("--compression", default="uncompressed",
+                   choices=["zstd", "lz4", "snappy", "gzip", "uncompressed"],
+                   help="Parquet compression codec (default: uncompressed). "
+                        "No decompression CPU overhead; recommended for vector workloads.")
     args = p.parse_args()
 
     # Auto-detect format and partition suffix
@@ -177,13 +181,19 @@ def main():
     md_local = md_path.replace("file://", "")
     if md_local.startswith("///"):
         md_local = md_local[2:]
+    # Patch metadata: add write properties for compression, then downgrade format-version
     with open(md_local, "r") as fh:
         meta = json.load(fh)
     if meta.get("format-version") == 3:
         meta["format-version"] = 2
-        with open(md_local, "w") as fh:
-            json.dump(meta, fh)
-        print(f"  Downgraded format-version: 3 → 2")
+    # Inject Parquet compression codec into table properties.
+    # pyiceberg's FileIO reads this from table metadata at write time.
+    # We patch metadata directly instead of calling update_properties()
+    # for compatibility with older pyiceberg versions.
+    meta.setdefault("properties", {})["write.parquet.compression-codec"] = args.compression
+    with open(md_local, "w") as fh:
+        json.dump(meta, fh)
+    print(f"  Format: 3→2, compression={args.compression}")
 
     # 6. Append data — use pyiceberg SQL catalog (StaticTable is read-only)
     print(f"\n=== Step 5: Append {n} rows ===")
@@ -197,6 +207,8 @@ def main():
     catalog.create_namespace_if_not_exists(args.namespace)
     tbl = catalog.register_table(f"{args.namespace}.{args.table}", md_path)
     arrow_schema = schema_to_pyarrow(tbl.schema())
+    # Note: compression codec is set via metadata JSON patch (Step 4 above),
+    # not via update_properties() which is unavailable in older pyiceberg.
 
     total = 0
     for start in range(0, n, args.chunk_size):
@@ -236,7 +248,7 @@ def main():
                        capture_output=True, text=True, timeout=30)
     print(f"\n  openGauss count: {r.stdout.strip()}")
 
-    print("\n=== Done! ===")
+    print(f"\n=== Done! (compression={args.compression}) ===")
     nc = args.num_clusters
     idx_sql = (
         f"SELECT iceberg_catalog.create_index('{args.namespace}', '{args.table}',"

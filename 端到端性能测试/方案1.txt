@@ -1,0 +1,219 @@
+现在我已经有完整分析。以下是结论：
+
+---
+分析结论：LRU 缓存已经存在，方案可行但需要做的是"补全"而非"新增"
+
+当前状态：大部分搜索路径已缓存
+
+engine.rs 已经实现了完整的 LRU 缓存基础设施：
+
+metadata_cache: Mutex<lru::LruCache<String, Arc<IndexedTableView>>>  // 容量 64
+loading_views: Mutex<HashMap<String, Arc<Mutex<()>>>>                // 单飞锁
+
+三条主搜索路径全部已缓存（engine.rs + metadata_ops.rs）：
+
+┌──────────────────────────────┬─────────────────────┬──────────────────────┐
+│             方法             │       缓存？        │       代码位置       │
+├──────────────────────────────┼─────────────────────┼──────────────────────┤
+│ search_vector_by_metadata    │ ✅ get_or_load_view │ metadata_ops.rs:1595 │
+├──────────────────────────────┼─────────────────────┼──────────────────────┤
+│ index_scan_by_metadata       │ ✅ get_or_load_view │ metadata_ops.rs:2069 │
+├──────────────────────────────┼─────────────────────┼──────────────────────┤
+│ plan_index_files_by_metadata │ ✅ get_or_load_view │ metadata_ops.rs:1992 │
+└──────────────────────────────┴─────────────────────┴──────────────────────┘
+
+每条路径的 cold miss 只发生一次（读 metadata.json + 解析 Puffin registry），后续命中 LRU cache 直接返回 Arc<IndexedTableView>。
+
+---
+问题所在：有 3 类未缓存的路径
+
+1. match_index_by_metadata 等查询前控制面方法
+
+// metadata_ops.rs:1729 — 每次调用都 open_metadata_location，绕过缓存
+pub fn match_index_by_metadata(&self, req: &MetadataMatchRequest) -> ... {
+    let view = IndexedTableView::open_metadata_location(...)  // ❌ 无缓存
+}
+
+IVFPQ 查询的典型流程是 match_index → plan_index_files → index_scan。match_index 每次都重新加载，后续两步反而用的是缓存结果。每个查询至少产生一次冗余的 metadata.json 读取 + Puffin 解析。
+
+同样的问题出现在：build_index_by_metadata、drop_index_by_metadata、registry_state_by_metadata 等。
+
+2. from_table() 内部的 resolve_registry()
+
+// metadata.rs:263-271
+pub async fn from_table(table: Arc<Table>, ...) -> Result<Self> {
+    let registry = resolve_registry(&table, snapshot_id).await?;  // ← 读 Puffin 文件
+    // ...
+}
+
+resolve_registry() 会读取索引注册表 Puffin 文件。如果 metadata_location 相同但快照不同，LRU key 相同可以命中。但 Puffin 本身也可能较大（几百 KB），首次加载有 I/O 开销。
+
+3. table_load_inner 的来源
+
+现在我已经有完整分析。以下是结论：
+
+---
+分析结论：LRU 缓存已经存在，方案可行但需要做的是"补全"而非"新增"
+
+当前状态：大部分搜索路径已缓存
+
+engine.rs 已经实现了完整的 LRU 缓存基础设施：
+
+metadata_cache: Mutex<lru::LruCache<String, Arc<IndexedTableView>>>  // 容量 64
+loading_views: Mutex<HashMap<String, Arc<Mutex<()>>>>                // 单飞锁
+
+三条主搜索路径全部已缓存（engine.rs + metadata_ops.rs）：
+
+┌──────────────────────────────┬─────────────────────┬──────────────────────┐
+│             方法             │       缓存？        │       代码位置       │
+├──────────────────────────────┼─────────────────────┼──────────────────────┤
+│ search_vector_by_metadata    │ ✅ get_or_load_view │ metadata_ops.rs:1595 │
+├──────────────────────────────┼─────────────────────┼──────────────────────┤
+│ index_scan_by_metadata       │ ✅ get_or_load_view │ metadata_ops.rs:2069 │
+├──────────────────────────────┼─────────────────────┼──────────────────────┤
+│ plan_index_files_by_metadata │ ✅ get_or_load_view │ metadata_ops.rs:1992 │
+└──────────────────────────────┴─────────────────────┴──────────────────────┘
+
+每条路径的 cold miss 只发生一次（读 metadata.json + 解析 Puffin registry），后续命中 LRU cache 直接返回 Arc<IndexedTableView>。
+
+---
+问题所在：有 3 类未缓存的路径
+
+1. match_index_by_metadata 等查询前控制面方法
+
+// metadata_ops.rs:1729 — 每次调用都 open_metadata_location，绕过缓存
+pub fn match_index_by_metadata(&self, req: &MetadataMatchRequest) -> ... {
+    let view = IndexedTableView::open_metadata_location(...)  // ❌ 无缓存
+}
+
+IVFPQ 查询的典型流程是 match_index → plan_index_files → index_scan。match_index 每次都重新加载，后续两步反而用的是缓存结果。每个查询至少产生一次冗余的 metadata.json 读取 + Puffin 解析。
+
+同样的问题出现在：build_index_by_metadata、drop_index_by_metadata、registry_state_by_metadata 等。
+
+2. from_table() 内部的 resolve_registry()
+
+// metadata.rs:263-271
+pub async fn from_table(table: Arc<Table>, ...) -> Result<Self> {
+    let registry = resolve_registry(&table, snapshot_id).await?;  // ← 读 Puffin 文件
+    // ...
+}
+
+resolve_registry() 会读取索引注册表 Puffin 文件。如果 metadata_location 相同但快照不同，LRU key 相同可以命中。但 Puffin 本身也可能较大（几百 KB），首次加载有 I/O 开销。
+
+3. table_load_inner 的来源
+
+table_load_inner 没有出现在任何源文件中（Rust/C/C++），只出现在 perf flamegraph 里。它可能是：
+- GaussDB 二进制内部的函数（从动态库符号 demangle 出来的名字）
+- data_infra/deps/iceberg-rust-bridge（未拉取的 git submodule）中的 wrapper 函数
+
+这个函数最可能的身份是：bridge C 代码中调用 iceberg_index_rs_match_index_by_metadata / iceberg_index_rs_plan_index_files_by_metadata 的 wrapper。根据上面的分析，match_index_by_metadata 确实每次都重新加载表元数据。
+
+---
+方案：LRU 缓存完全可行，改动很小
+
+核心方案就是把 match_index_by_metadata 等方法从直接 open_metadata_location 改为使用已有的 get_or_load_view：
+
+改前（每次查询都加载）：
+pub fn match_index_by_metadata(&self, req: &MetadataMatchRequest) -> ... {
+    let file_io = build_file_io(&req.file_io_config_json)?;
+    let view = IndexedTableView::open_metadata_location(MetadataLocationTableConfig { ... })  // ❌
+        .map_err(...)?;
+    // ...
+}
+
+改后（复用缓存）：
+pub fn match_index_by_metadata(&self, req: &MetadataMatchRequest) -> ... {
+    let file_io = build_file_io(&req.file_io_config_json)?;
+    let cache_key = Self::metadata_cache_key(&req.metadata_location);
+    let shared_loader = self.loader().clone();
+    let view = self.get_or_load_view(&cache_key, || {  // ✅
+        self.block_on(async {
+            let table = load_metadata_location_table(MetadataLocationTableConfig { ... }).await?;
+            IndexedTableView::from_table(table, Some(shared_loader.clone())).await.map(Arc::new)
+        })
+    })?;
+    // ...
+}
+
+需要改的方法清单（约 8 处）：
+
+┌────────────────────────────────────────────┬────────┬─────────────────────────────────┐
+│                    方法                    │ 优先级 │              说明               │
+├────────────────────────────────────────────┼────────┼─────────────────────────────────┤
+│ match_index_by_metadata                    │   高   │ 每次查询都调，IVF/FullScan 都走 │
+├────────────────────────────────────────────┼────────┼─────────────────────────────────┤
+│ registry_state_by_metadata                 │   中   │ 查询前校验                      │
+├────────────────────────────────────────────┼────────┼─────────────────────────────────┤
+│ build_index_by_metadata                    │   低   │ 低频操作                        │
+├────────────────────────────────────────────┼────────┼─────────────────────────────────┤
+│ drop_index_by_metadata                     │   低   │ 低频操作                        │
+├────────────────────────────────────────────┼────────┼─────────────────────────────────┤
+│ optimize_index_by_metadata                 │   低   │ 低频操作                        │
+├────────────────────────────────────────────┼────────┼─────────────────────────────────┤
+│ plan_parallel_build_by_metadata            │   低   │ 低频操作                        │
+├────────────────────────────────────────────┼────────┼─────────────────────────────────┤
+│ execute_planned_build_task_by_metadata     │   低   │ 低频操作                        │
+├────────────────────────────────────────────┼────────┼─────────────────────────────────┤
+│ assemble_parallel_build_staged_by_metadata │   低   │ 低频操作                        │
+└────────────────────────────────────────────┴────────┴─────────────────────────────────┘
+
+---
+收益估算
+
+单次 load_metadata_location_table + from_table 的开销：
+- metadata.json 读取：~1-5KB JSON，本地 FS <1ms，网络存储 1-10ms
+- resolve_registry (Puffin 读取)：~50-200KB，本地 <5ms，S3 5-50ms
+- 冷缓存总开销：~10-100ms，取决于存储后端
+
+如果 match_index_by_metadata 也走缓存，每个 IVFPQ 查询可节省 ~10-50ms（热路径上大部分已经是缓存命中，这个修复主要消除 match_index 的冗余加载）。
+
+▎ 注意：当前的 index_scan_by_metadata 搜索路径已缓存，match_index_by_metadata 是主搜索链路中唯一不走缓存的环节。修复它就是消除 table_load_inner 在每查询都出现的原因。
+
+结论
+
+方案完全可行，基础设施已就绪，改动量小且低风险。 主搜索路径已缓存，需要补全的是控制面方法（match_index_by_metadata 等）使其也使用 get_or_load_view。建议优先修复 match_index_by_metadata（影响面最大），再逐步覆盖其余方法。
+
+是否需要我开始实现这个改动？
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+❯ metadata_cache和loading_views里大概缓存了什么东西
+
+  Thought for 27s, searched for 5 patterns, read 4 files
+
+两者缓存的差异：
+
+---
+metadata_cache — 缓存完整的 IndexedTableView
+
+Key: String — metadata_location 的完整路径（如 file:///data/sift_ns/sift1m/metadata/v1.metadata.json）
+
+Value: Arc<IndexedTableView>，包含一个表的全部"热数据"：
+
+Arc<IndexedTableView>  (一个 Arc 指针，约 8 字节，指向堆上的完整结构)
+
+├─ table: Arc<Table>
+│  ├─ file_io: FileIO                          # 文件系统句柄
+│  ├─ metadata: TableMetadataRef               # ─── 最大的一块 ───
+│  │  └─ Arc<TableMetadata>                    # 从 metadata.json 反序列化出来的完整对象
+│  │     ├─ format_version, table_uuid, location
+│  │     ├─ schemas: HashMap<id, SchemaRef>       # 所有历史 schema（列名/类型）
+│  │     ├─ partition_specs: HashMap<id, Spec>    # 所有历史分区定义
+│  │     ├─ properties: HashMap<String, String>   # 表属性
+│  │     ├─ snapshots: HashMap<id, SnapshotRef>   # 所有历史 snapshot 元信息
+│  │     │  └─ Snapshot { manifest_list 路径, summary, schema_id, ... }
+│  │     ├─ snapshot_log, metadata_log, refs, statistics, ...
+
+  1 tasks (0 done, 1 in progress, 0 open)
+  ◼ 分析 bridge 层 LRU 缓存 table_load_inner 的可行性

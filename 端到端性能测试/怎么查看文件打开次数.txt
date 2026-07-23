@@ -1,0 +1,18 @@
+查看文件打开次数：
+
+# 1. attach strace 到 gaussdb 进程
+PID=$(pgrep -x gaussdb | head -1)
+strace -f -e openat -p $PID -o /tmp/strace.log &
+SPID=$!
+
+# 2. 跑查询
+gsql -d postgres -p 37000 -c "SELECT ..." > /dev/null
+
+# 3. 停 strace
+kill $SPID
+
+# 4. 统计
+grep -oP '/[^"]+\.parquet' /tmp/strace.log | sort | uniq -c | sort -rn | head -10
+grep -c 'metadata.json' /tmp/strace.log   # 某个文件的打开总次数
+
+-f 跟踪子线程，-e openat 只看文件打开，uniq -c 按文件聚合计数。

@@ -217,6 +217,14 @@ build_opengauss() {
     step "编译 openGauss-server-datainfra ($BUILD_MODE 模式, 约 30-60 分钟)"
 
     check_binarylibs
+    # binarylibs 默认 libonnxruntime.so.1 → 1.16.3，但 onnx_wrapper 需要 1.22.0
+    local onnx_lib="$BINARYLIBS_DIR/kernel/dependency/onnxruntime"
+    for subdir in comm llt; do
+        [ -f "$onnx_lib/$subdir/lib/libonnxruntime.so.1.22.0" ] && \
+            ln -sfn libonnxruntime.so.1.22.0 "$onnx_lib/$subdir/lib/libonnxruntime.so.1" 2>/dev/null
+        [ -f "$onnx_lib/$subdir/lib/libonnxruntime.so.1.22.0" ] && \
+            ln -sfn libonnxruntime.so.1 "$onnx_lib/$subdir/lib/libonnxruntime.so" 2>/dev/null
+    done
     check_file "openGauss 源码" "$OPENGAUSS_REPO/build.sh"
     setup_python_shim
     setup_boost_patch
@@ -237,7 +245,7 @@ build_opengauss() {
 
     source "$ICEBERG_OG_ROOT/opengauss.env" 2>/dev/null || true
     export PATH="$OG_SHIM:$GCC_HOME/bin:/usr/local/bin:/usr/bin:/bin"
-    export LD_LIBRARY_PATH="$GAUSSHOME/lib:$GAUSSHOME/lib/postgresql:$GCC_HOME/lib64:$GCTOOLS/isl/lib:$GCTOOLS/mpc/lib:$GCTOOLS/mpfr/lib:$GCTOOLS/gmp/lib:$PYTHON_HOME/lib:$SSL_HOME/lib:/usr/lib64:/lib64"
+    export LD_LIBRARY_PATH="$GAUSSHOME/lib:$GAUSSHOME/lib/postgresql:$GCC_HOME/lib64:$GCTOOLS/isl/lib:$GCTOOLS/mpc/lib:$GCTOOLS/mpfr/lib:$GCTOOLS/gmp/lib:$PYTHON_HOME/lib:$SSL_HOME/lib:$BINARYLIBS_DIR/kernel/dependency/onnxruntime/comm/lib:/usr/lib64:/lib64"
 
     cd "$OPENGAUSS_REPO"
     rm -rf tmp_build "$GAUSSHOME" 2>/dev/null || true

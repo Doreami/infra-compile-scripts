@@ -7,7 +7,7 @@ if not os.path.exists(GSQL):
     GSQL = "gsql"
 DATA_DIR = os.path.expanduser("~/测试文件")
 
-def gsql(sql, timeout=300):
+def gsql(sql, timeout=600):
     r = subprocess.run([GSQL, "-d", "postgres", "-p", "37000", "-c", sql],
                        capture_output=True, text=True, timeout=timeout)
     out = r.stdout + r.stderr
@@ -25,6 +25,17 @@ def load_query(dataset, idx=0):
         vs = 4 + dim * 4
         off = idx * vs
         vec = struct.unpack_from(f"<{dim}f", data, off + 4)
+    elif dataset == "deep":
+        # fbin format: [nvecs: i32][dim: i32][float32...]
+        deep_q = os.path.join(DATA_DIR, "query.public.10K.fbin")
+        if not os.path.exists(deep_q):
+            deep_q = os.path.expanduser("~/big-ann-benchmarks/data/deep1b/query.public.10K.fbin")
+        with open(deep_q, "rb") as f:
+            nvecs = struct.unpack("<i", f.read(4))[0]
+            dim = struct.unpack("<i", f.read(4))[0]
+            off_bytes = 8 + idx * dim * 4
+            f.seek(off_bytes)
+            vec = struct.unpack(f"<{dim}f", f.read(dim * 4))
     else:  # gist
         import h5py
         with h5py.File(os.path.join(DATA_DIR, "gist-960-euclidean.hdf5"), "r") as f:
@@ -65,5 +76,8 @@ run_bench("sift", "sift_ns", "sift1m", 128, [10, 100, 10000])
 
 # GIST
 run_bench("gist", "gist_ns", "gist1m", 960, [10, 100, 10000])
+
+# DEEP-100M — FullScan 可能 >5min, 由 gsql(timeout=600) 保障
+run_bench("deep", "deep_ns", "deep100m", 96, [10, 100, 10000])
 
 print("\n=== Done ===")

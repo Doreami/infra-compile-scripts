@@ -12,6 +12,9 @@ import numpy as np
 
 GSQL = os.path.expanduser("~/iceberg-og/openGauss-server-datainfra/mppdb_temp_install/bin/gsql")
 DATA_DIR = os.path.expanduser("~/测试文件")
+BIGANN_DIR = os.path.expanduser("~/big-ann-benchmarks/data")
+if not os.path.exists(GSQL):
+    GSQL = "gsql"
 
 DATASETS = {
     "sift": {
@@ -23,6 +26,11 @@ DATASETS = {
         "dim": 960,
         "gt_file": "gist-960-euclidean.hdf5", "gt_fmt": "hdf5", "gt_key": "neighbors",
         "query_file": "gist-960-euclidean.hdf5", "query_fmt": "hdf5", "query_key": "test",
+    },
+    "deep": {
+        "dim": 96,
+        "gt_file": "deep-100M", "gt_fmt": "ibin",
+        "query_file": "query.public.10K.fbin", "query_fmt": "fbin",
     },
 }
 
@@ -54,6 +62,37 @@ def _read_ivecs(path, n, k):
     return np.array([r[:k] for r in rows], dtype=np.int32) + 1
 
 
+def _read_ibin(path, n, k):
+    """Read .ibin ground truth: [nvecs: int32][dim: int32][int32 × nvecs × dim].
+    0-based indices, convert to 1-based for table IDs."""
+    with open(path, "rb") as f:
+        nvecs = struct.unpack("<i", f.read(4))[0]
+        dim = struct.unpack("<i", f.read(4))[0]
+        data = f.read()
+    rows = []
+    off = 0
+    for _ in range(min(n, nvecs)):
+        row = list(struct.unpack_from(f"<{dim}i", data, off))
+        off += dim * 4
+        rows.append(row)
+    return np.array([r[:k] for r in rows], dtype=np.int32) + 1
+
+
+def _read_fbin(path, n):
+    """Read .fbin query file: [nvecs: int32][dim: int32][float32 × nvecs × dim]."""
+    with open(path, "rb") as f:
+        nvecs = struct.unpack("<i", f.read(4))[0]
+        dim = struct.unpack("<i", f.read(4))[0]
+        data = f.read()
+    vecs = []
+    off = 0
+    row_bytes = dim * 4
+    for _ in range(min(n, nvecs)):
+        vecs.append(list(struct.unpack_from(f"<{dim}f", data, off)))
+        off += row_bytes
+    return vecs
+
+
 # ── Main ──
 
 def main():
@@ -72,26 +111,45 @@ def main():
     table = f"{ns}.{tbl}"
 
     # Load ground truth
-    gt_path = os.path.join(DATA_DIR, cfg["gt_file"])
+    gt_path = (os.path.join(DATA_DIR, cfg["gt_file"]) if cfg["gt_file"] else None)
+    if gt_path and not os.path.exists(gt_path):
+        # fallback: big-ann-benchmarks data dir
+        ds_name = args.dataset + "1b"  # e.g. deep1b
+        alt = os.path.join(BIGANN_DIR, ds_name, cfg["gt_file"])
+        if os.path.exists(alt):
+            gt_path = alt
     if cfg["gt_fmt"] == "ivecs":
         gt = _read_ivecs(gt_path, args.nq, args.k)
-    else:
+    elif cfg["gt_fmt"] == "ibin":
+        gt = _read_ibin(gt_path, args.nq, args.k)
+    elif cfg["gt_fmt"] == "hdf5":
         import h5py
         with h5py.File(gt_path, "r") as f:
-            gt = np.array(f[cfg["gt_key"]][:args.nq, :args.k], dtype=np.int32) + 1  # 0→1-based
+            gt = np.array(f[cfg["gt_key"]][:args.nq, :args.k], dtype=np.int32) + 1
+    else:
+        sys.exit(f"Unknown gt_fmt: {cfg['gt_fmt']}")
 
     # Load queries
-    q_path = os.path.join(DATA_DIR, cfg["query_file"])
+    q_path = os.path.join(DATA_DIR, cfg["query_file"]) if cfg["query_file"] else None
+    if q_path and not os.path.exists(q_path):
+        ds_name = args.dataset + "1b"
+        alt = os.path.join(BIGANN_DIR, ds_name, cfg["query_file"])
+        if os.path.exists(alt):
+            q_path = alt
     if cfg["query_fmt"] == "fvecs":
         queries = _read_fvecs(q_path, args.nq)
-    else:
+    elif cfg["query_fmt"] == "fbin":
+        queries = _read_fbin(q_path, args.nq)
+    elif cfg["query_fmt"] == "hdf5":
         import h5py
         with h5py.File(q_path, "r") as f:
             queries = f[cfg["query_key"]][:args.nq].tolist()
+    else:
+        sys.exit(f"Unknown query_fmt: {cfg['query_fmt']}")
 
     print(f"=== Recall@{args.k} — {args.dataset.upper()} (前 {args.nq} 条 query) ===\n")
 
-    def _gsql(sql, timeout=180):
+    def _gsql(sql, timeout=600):
         r = subprocess.run([GSQL, "-d", "postgres", "-p", "37000", "-t", "-A", "-c", sql],
                            capture_output=True, text=True, timeout=timeout)
         return [int(x.strip()) for x in r.stdout.strip().split("\n") if x.strip().lstrip("-").isdigit()]

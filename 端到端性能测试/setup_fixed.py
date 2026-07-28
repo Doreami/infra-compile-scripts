@@ -89,6 +89,7 @@ def main():
 
     # Auto-detect format and partition suffix
     part_buckets = args.partition_buckets
+    vec_type = args.vec_type
     ns_suffix = "_part" if part_buckets > 0 else ""
     tbl_suffix = "_part" if part_buckets > 0 else ""
 
@@ -133,13 +134,20 @@ def main():
 
     # 2. create_table
     print("\n=== Step 2: openGauss create_table ===")
+    if vec_type == "fixed":
+        vec_schema = {"id": 2, "name": "vec", "type": f"fixed[{fixed_len}]",
+                       "required": False, "vector_dim": dim}
+    else:
+        vec_schema = {"id": 2, "name": "vec", "type": {
+            "type": "list", "element": "float",
+            "element-id": 100, "element-required": True
+        }, "required": False}
     schema_json = json.dumps({
         "type": "struct",
         "schema-id": 0,
         "fields": [
             {"id": 1, "name": "id", "type": "long", "required": True},
-            {"id": 2, "name": "vec", "type": f"fixed[{fixed_len}]",
-             "required": False, "vector_dim": dim},
+            vec_schema,
         ]
     })
 
@@ -280,9 +288,15 @@ def main():
 
         chunk = base[round_start:round_end]
         ids_arr = pa.array(range(round_start + 1, round_end + 1), type=pa.int64())
-        data_buf = pa.py_buffer(chunk.tobytes())
-        vec_arr = pa.FixedSizeBinaryArray.from_buffers(
-            pa.binary(fixed_len), round_n, [None, data_buf])
+        if vec_type == "fixed":
+            data_buf = pa.py_buffer(chunk.tobytes())
+            vec_arr = pa.FixedSizeBinaryArray.from_buffers(
+                pa.binary(fixed_len), round_n, [None, data_buf])
+        else:
+            flat = chunk.ravel()
+            offsets = np.arange(0, (round_n + 1) * dim, dim, dtype=np.int64)
+            vec_arr = pa.ListArray.from_arrays(
+                pa.array(offsets), pa.array(flat, type=pa.float32()))
         batch = pa.table([ids_arr, vec_arr], schema=arrow_schema)
         tbl.append(batch)
 

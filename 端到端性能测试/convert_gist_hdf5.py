@@ -14,7 +14,7 @@ Output: Same format as convert_sift.py — Parquet files with id + vec (list<flo
 Usage:
     python3 convert_gist_hdf5.py \
         --hdf5 ~/测试文件/gist-960-euclidean.hdf5 \
-        --warehouse file://$HOME/warehouse \
+        --warehouse file:///data/xl/warehouse \
         --namespace gist_ns \
         --table gist1m
 """
@@ -28,7 +28,7 @@ import pyarrow.parquet as pq
 def main():
     parser = argparse.ArgumentParser(description="Convert GIST1M HDF5 to Parquet")
     parser.add_argument("--hdf5", required=True, help="Path to gist-960-euclidean.hdf5")
-    parser.add_argument("--warehouse", required=True, help="Iceberg warehouse path (e.g. file://$HOME/warehouse)")
+    parser.add_argument("--warehouse", required=True, help="Iceberg warehouse path (e.g. file:///data/xl/warehouse)")
     parser.add_argument("--namespace", default="gist_ns")
     parser.add_argument("--table", default="gist1m")
     parser.add_argument("--rows-per-file", type=int, default=100000)

@@ -1,0 +1,164 @@
+═══════════════════════════════════════════════════════════════════════════
+                    端到端索引查询流程 (完整版)
+═══════════════════════════════════════════════════════════════════════════
+
+SQL: SELECT id FROM deep_ns_part.deep1b_part
+     ORDER BY vec <-> '[0.1, 0.2, ...]'::vector LIMIT 10
+
+
+┌─ 1. gaussdb Planner ────────────────────────────────────────────┐
+│                                                                    │
+│ vectorsearch_compute_fetch_k(topK=10):                             │
+│   fetchK = 10 × VECTORSEARCH_FETCH_MULTIPLIER(5) = 50              │
+│   fetchK = max(fetchK, VECTORSEARCH_FETCH_MIN(50))      → 50       │
+│   fetchK = min(fetchK, VECTORSEARCH_FETCH_MAX(10000))   → 50       │
+│                                                                    │
+│ → 传给 executor: k=10, fetchK=50                                   │
+│                                                                    │
+│ 硬编码常量: 5× / min 50 / max 10000                                 │
+└───────────────────────┬────────────────────────────────────────────┘
+                        ▼
+┌─ 2. gaussdb Executor → Bridge FFI ──────────────────────────────┐
+│                                                                    │
+│ 两个入口路径:                                                       │
+│                                                                    │
+│ A. metadata_ops.rs: index_scan_vector()    ← 较新, planner 驱动     │
+│    VectorSearchRequest { query, limit: over_fetch_k=50 }            │
+│                                                                    │
+│ B. engine.rs: scan_ann()                   ← FDW 路径               │
+│    base_limit = fetch_k = 50                                       │
+│    expanded_limit = 50 × refine_factor(1.0) = 50                   │
+│                                                                    │
+│ 两路都会走到 ↓                                                      │
+└───────────────────────┬────────────────────────────────────────────┘
+                        ▼
+┌─ 3. IcebergIndexedTable: search_vector_materialized() ──────────┐
+│                                                                    │
+│ result = self.search_vector(name, query {limit: 50})  索引搜索 ────┐   │
+│ reader.materialize_candidates(&result.candidates)    回表物化 ─────┼─┐ │
+│                                                                │ │ │
+└────────────────────────────────────────────────────────────────┼─┼─┘
+                                                                 │ │
+   ① 索引搜索 ┌──────────────────────────────────────────────────┘ │
+┌─ 4. search.rs: search_vector(limit=50) ────────────────────────┐ │
+│                                                                  │ │
+│ plan_coverage()                                                  │ │
+│   ├─ covered segments:  索引已覆盖 → index.search()   IVFPQ 插件    │ │
+│   └─ uncovered:  索引未覆盖 → plugin.full_scan_vector() 全表扫描兜底 │ │
+│                                                                  │ │
+│ merge: candidates.sort_by(score) → truncate(50)                  │ │
+│ → 50 个 IndexCandidate { RowAddress, score(ADC) }                 │ │
+└───────────────────────┬──────────────────────────────────────────┘ │
+                        ▼                                            │
+   ② IVFPQ 插件 ┌──────────────────────────────────────────────────┐ │
+┌─ 5. ivf_pq.rs: search(limit=50) ─────────────────────────────────┐ │
+│                                                                    │ │
+│ nprobe = 8                                                        │ │
+│ find_nearest_centroids(query, 8)  → 最近 8 个聚类中心               │ │
+│                                                                    │ │
+│ for pid in probe_ids:                                              │ │
+│   load_partition(pid)         ← 读索引 puffin 文件 (PQ codes)      │ │
+│   query_residual = query - centroid[pid]                           │ │
+│   compute_distance_table_into() → ADC 256×8 查表                   │ │
+│                                                                    │ │
+│   for each vector in partition:                                    │ │
+│     dist = Σ ADC_table[j][pq_code[i][j]]   ← 纯查表+累加           │ │
+│     candidates.push({row_position, file_index, score: dist})       │ │
+│                                                                    │ │
+│ candidates.sort_by(score) → truncate(50) → 返回 50 个候选          │ │
+│                                                                    │ │
+│ ✅ 无 Parquet 读取 — 全在索引 puffin 文件里                          │ │
+│ ✅ CPU 开销 <1% — ADC 查表极其高效                                   │ │
+└───────────────────────┬────────────────────────────────────────────┘ │
+                        ▼                                              │
+   ③ 回表物化 ┌──────────────────────────────────────────────────────┘ │
+┌─ 6. reader.rs: materialize_candidates(50) ─────────────────────────┐ │
+│                                                                      │ │
+│ read_file_rows_addressed(&addresses)  ← 只读 50 个 RowAddress        │ │
+│   │                                                                  │ │
+│   ├─ build_file_task_map()  ← 扫描 manifest, 建 file→tasks 映射      │ │
+│   │   .select(all columns)   ← 硬编码全列(id, vec)                    │ │
+│   │                                                                  │ │
+│   └─ for each file (1~5 个):                                         │ │
+│       scan_single_file(tasks, row_offsets=[...])                     │ │
+│         │                                                            │ │
+│         ├─ ArrowReaderBuilder.read()                                 │ │
+│         │   ├─ Parquet reader 解码 1 个 Row Group (1M 行)             │ │
+│         │   │   └─ page-at-a-time 解码全部 384MB vec 列               │ │
+│         │   └─ RowSelection 过滤 → 只留请求的 N 行                    │ │
+│         │                                                            │ │
+│         └─ take_record_batch(rows, indices)  ← 提取命中行             │ │
+│                                                                      │ │
+│ row_of: HashMap<RowAddress → index>                                  │ │
+│ 按 candidates 的分数顺序重排 → { batch, distances }                   │ │
+│                                                                      │ │
+│ ⚠️ 读 50 行，解码 5 个 RG × 384MB = 1.92GB (浪费 100,000×)            │ │
+└───────────────────────┬──────────────────────────────────────────────┘ │
+                        ▼                                                │
+   ④ 精确重排 ┌────────────────────────────────────────────────────────┐ │
+┌─ 7. engine.rs: refine_candidates() 或 metadata_ops.rs 直接组装 ────┐ │
+│                                                                      │ │
+│ for each of 50 materialized rows:                                    │ │
+│   exact_l2 = squared_l2(query_vec, row.vec)  ← 用 vec 列精确计算      │ │
+│                                                                      │ │
+│ 按 exact_l2 重排序 → 返回给 gaussdb                                   │ │
+│                                                                      │ │
+│ ⚠️ refine_factor=1.0 时不扩大, 50→50; >1.0 时多取多排少返              │ │
+└───────────────────────┬──────────────────────────────────────────────┘ │
+                        ▼                                                │
+┌─ 8. assemble_scan_output() → 投影输出列(id) → 返回 Arrow batches ──┐ │
+│                                                                      │ │
+│ Bridge FFI → gaussdb → 50 行 id+score                                │ │
+│ gaussdb 取 top-10 → 返回给用户                                        │ │
+└──────────────────────────────────────────────────────────────────────┘ │
+                                                                         │
+═══════════════════════════════════════════════════════════════════════════
+                            时间分布 (GIST 1M)
+═══════════════════════════════════════════════════════════════════════════
+                                                                         │
+  Step 4-5  索引搜索 (ADC)         ▏ < 1%                                 │
+  Step 6    回表物化 Parquet 解码   ██████████████ 87%  ← RG 全量解码       │
+  Step 7    精确 L2 重排            ▏ < 1%                                 │
+  Step 2,8  桥接+输出              ▏ ~ 2%                                  │
+  内核       rep_movs+clear_page   ██████████ 61%  ← 192MB 内存分配        │
+                                                                         │
+═══════════════════════════════════════════════════════════════════════════
+                            fetchK 影响分析 (DEEP-1B)
+═══════════════════════════════════════════════════════════════════════════
+                                                                         │
+  SQL LIMIT  fetchK  索引搜索    回表行数   RG 命中(估)  解码量            │
+  ─────────  ──────  ────────   ────────  ───────────  ──────            │
+   1         50      <1ms       50        1-2 RG       0.4-0.8 GB        │
+  10         50      <1ms       50        1-2 RG       0.4-0.8 GB        │
+ 100        500      ~1ms      500        2-5 RG       0.8-1.9 GB        │
+ 1000      5000      ~5ms     5000       5-10 RG       1.9-3.8 GB        │
+ 10000    10000     ~10ms    10000(max)  10-20 RG      3.8-7.7 GB        │
+                                                                         │
+  5× 乘数 + min=50 意味着:                                                │
+  • 小查询 (LIMIT≤10) 平白多读 40 行, RG 浪费比 100,000×                   │
+  • 大查询 (LIMIT≥2000) 封顶 10000, 不至于爆炸                             │
+  • 最痛的始终是 RG 粒度 — 读 1 行也要解码 1M 行                            │
+                                                                         │
+═══════════════════════════════════════════════════════════════════════════
+
+fetchK不是 SQL LIMIT 的上限，是 索引多取的 fetchK 上限：
+
+fetchK = min(topK × 5, 10000)   // 不是 clamp SQL LIMIT
+
+┌───────────┬────────────────┬─────────────┬─────────────┐
+│ SQL LIMIT │  fetchK 计算   │ 实际 fetchK │    说明     │
+├───────────┼────────────────┼─────────────┼─────────────┤
+│    10     │ 10×5=50        │     50      │ min 兜底    │
+├───────────┼────────────────┼─────────────┼─────────────┤
+│    100    │ 100×5=500      │     500     │             │
+├───────────┼────────────────┼─────────────┼─────────────┤
+│   1000    │ 1000×5=5000    │    5000     │             │
+├───────────┼────────────────┼─────────────┼─────────────┤
+│   2000    │ 2000×5=10000   │    10000    │ 刚好到顶    │
+├───────────┼────────────────┼─────────────┼─────────────┤
+│   5000    │ 5000×5=25000   │    10000    │ 被 cap 截断 │
+├───────────┼────────────────┼─────────────┼─────────────┤
+│   50000   │ 50000×5=250000 │    10000    │ 被 cap 截断 │
+└───────────┴────────────────┴─────────────┴─────────────┘
+
+SQL LIMIT 50000 本身能执行——但索引只返回 10000 个候选，不够的 40000 要么靠全扫兜底路径补，要么索引路径直接报错/截断。实际上 LIMIT > 2000 的场景索引就不够用了。

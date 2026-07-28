@@ -26,7 +26,7 @@ def main():
         gsql = "gsql"
 
     warehouse = os.path.expanduser(
-        os.environ.get("ICEBERG_WAREHOUSE", "file://$HOME/warehouse").replace("file://", ""))
+        os.environ.get("ICEBERG_WAREHOUSE", "file:///data/xl/warehouse").replace("file://", ""))
     warehouse_uri = f"file://{warehouse}"
 
     # 1. Read HDF5

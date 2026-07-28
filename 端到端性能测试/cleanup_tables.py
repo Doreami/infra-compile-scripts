@@ -7,7 +7,7 @@ if not os.path.exists(gsql):
     gsql = "gsql"
 
 warehouse = os.path.expanduser(
-    os.environ.get("ICEBERG_WAREHOUSE", "$HOME/warehouse").replace("file://", ""))
+    os.environ.get("ICEBERG_WAREHOUSE", "/data/xl/warehouse").replace("file://", ""))
 
 for ns in ["gist_ns", "sift_ns"]:
     for tbl in ["gist1m", "sift1m"]:

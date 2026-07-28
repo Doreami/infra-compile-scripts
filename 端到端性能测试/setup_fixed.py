@@ -1,11 +1,23 @@
 #!/usr/bin/env python3
 """Import vector datasets into openGauss via create_table + pyiceberg append.
 
-Supports HDF5 and fvecs formats. Auto-detects from file extension.
+Supports HDF5, fvecs, and fbin formats. Auto-detects from file extension.
+Large fbin files stream via memmap (no full-RAM load).
+Partitioned tables group rows by id_bucket before append (1 file/bucket/round).
 
 Usage:
+  # Small datasets (SIFT/GIST)
   python3 setup_fixed.py --input ~/测试文件/gist-960-euclidean.hdf5
   python3 setup_fixed.py --input ~/测试文件/sift_base.fvecs
+
+  # Large fbin datasets
+  python3 setup_fixed.py --input ~/big-ann-benchmarks/data/deep1b/base.1B.fbin \
+      --namespace deep_ns --table deep1b --chunk-size 1000000
+
+  # Partitioned table (parallel query testing)
+  python3 setup_fixed.py --input ~/big-ann-benchmarks/data/deep1b/base.1B.fbin \
+      --namespace deep_ns --table deep1b --chunk-size 1000000 \
+      --partition-buckets 32
 """
 import argparse, os, sys, subprocess, json, struct
 import numpy as np
@@ -38,19 +50,22 @@ def read_fvecs(path):
 def read_fbin(path, max_rows=None):
     """Read .fbin file: [nvecs: int32][dim: int32][float32 × nvecs × dim]
 
+    Returns (array, n, dim).  For large files returns a memmap (no copy);
+    callers must slice chunks without loading the entire file.
     Cropped files (e.g. deep-100M from deep-1B) have header nvecs > actual data.
     Use max_rows to override nvecs when the file is a partial download.
     """
     with open(path, "rb") as f:
         header_nvecs = struct.unpack("<i", f.read(4))[0]
         dim = struct.unpack("<i", f.read(4))[0]
-    arr = np.memmap(path, dtype=np.float32, mode='r', offset=8)
     n = max_rows if max_rows else header_nvecs
+    arr = np.memmap(path, dtype=np.float32, mode='r', offset=8)
     expected = n * dim
     actual = len(arr)
     if actual < expected:
         n = actual // dim
-    return arr[:expected].reshape(n, dim).copy()
+    # Return memmap view (no copy) — caller is responsible for chunking
+    return arr[:expected].reshape(n, dim), n, dim
 
 
 def main():
@@ -100,16 +115,19 @@ def main():
     if not os.path.exists(gsql):
         gsql = "gsql"
 
-    warehouse_env = os.environ.get("ICEBERG_WAREHOUSE", "file://$HOME/warehouse")
+    warehouse_env = os.environ.get("ICEBERG_WAREHOUSE", "file:///data/xl/warehouse")
     if warehouse_env.startswith("file://"):
         warehouse_env = warehouse_env[7:]
     warehouse = os.path.expanduser(warehouse_env)
 
     # 1. Read data
     print(f"=== Step 1: Read {fmt} file ===")
-    read_fn = {"hdf5": read_hdf5, "fvecs": read_fvecs, "fbin": read_fbin}[fmt]
-    base = read_fn(args.input) if fmt != "fbin" else read_fbin(args.input, args.max_rows)
-    n, dim = base.shape
+    if fmt == "fbin":
+        base, n, dim = read_fbin(args.input, args.max_rows)
+    else:
+        read_fn = {"hdf5": read_hdf5, "fvecs": read_fvecs}[fmt]
+        base = read_fn(args.input)
+        n, dim = base.shape
     fixed_len = dim * 4
     print(f"  {n} × {dim} → fixed({fixed_len})")
 
@@ -178,17 +196,29 @@ def main():
     resp = json.loads(r.stdout.strip())
     print(f"  Created: {args.namespace}.{args.table}")
 
-    # 3. Verify type
+    # 3. Verify type & auto-fix
     print("\n=== Step 3: Verify column type ===")
     r = subprocess.run([gsql, "-d", "postgres", "-p", "37000", "-t", "-A", "-c",
-                        f"SELECT format_type(atttypid, atttypmod) FROM pg_attribute "
-                        f"WHERE attrelid='{args.namespace}.{args.table}'::regclass "
-                        f"AND attname='vec';"],
+                        f"SELECT format_type(a.atttypid, a.atttypmod) "
+                        f"FROM pg_attribute a JOIN pg_class c ON a.attrelid=c.oid "
+                        f"JOIN pg_namespace n ON c.relnamespace=n.oid "
+                        f"WHERE n.nspname='{args.namespace}' AND c.relname='{args.table}' "
+                        f"AND a.attname='vec';"],
                        capture_output=True, text=True, timeout=30)
     col_type = r.stdout.strip()
     print(f"  vec: {col_type}")
     if col_type != f"vector({dim})":
-        sys.exit(f"  FAIL: expected vector({dim}), got {col_type}")
+        print(f"  ALTER: {col_type or 'empty'} → vector({dim})")
+        r = subprocess.run([gsql, "-d", "postgres", "-p", "37000", "-c",
+                        f"ALTER FOREIGN TABLE {args.namespace}.{args.table} "
+                        f"ALTER COLUMN vec TYPE vector({dim});"],
+                       capture_output=True, text=True, timeout=15)
+        if r.returncode != 0:
+            print(f"  ALTER failed: {r.stderr.strip()}")
+            # Try checking what columns exist
+            subprocess.run([gsql, "-d", "postgres", "-p", "37000", "-c",
+                            f"\\d {args.namespace}.{args.table}"],
+                           capture_output=True, timeout=10)
 
     # 4. Get metadata path for StaticTable
     md_path = resp.get("metadata_location", "")
@@ -220,8 +250,10 @@ def main():
         json.dump(meta, fh)
     print(f"  Format: 3→2, compression={args.compression}")
 
-    # 6. Append data — use pyiceberg SQL catalog (StaticTable is read-only)
-    print(f"\n=== Step 5: Append {n} rows ===")
+    # 6. Append data — use pyiceberg SQL catalog.  For fbin files we stream
+    #    via memmap to avoid loading the full dataset into memory.
+    print(f"\n=== Step 5: Append {n} rows (chunk_size={args.chunk_size}, "
+          f"partitions={part_buckets or 'none'}) ===")
     from pyiceberg.catalog.sql import SqlCatalog
     tmp_db = os.path.join(os.path.expanduser("~"), f".pyiceberg_{args.namespace}.db")
     for ext in ["", "-wal", "-shm"]:
@@ -232,22 +264,32 @@ def main():
     catalog.create_namespace_if_not_exists(args.namespace)
     tbl = catalog.register_table(f"{args.namespace}.{args.table}", md_path)
     arrow_schema = schema_to_pyarrow(tbl.schema())
-    # Note: compression codec is set via metadata JSON patch (Step 4 above),
-    # not via update_properties() which is unavailable in older pyiceberg.
 
     total = 0
-    for start in range(0, n, args.chunk_size):
-        end = min(start + args.chunk_size, n)
-        vec_bytes = [base[i].tobytes() for i in range(start, end)]
-        batch = pa.table(
-            [pa.array(range(start + 1, end + 1), type=pa.int64()),
-             pa.array(vec_bytes, type=pa.binary(fixed_len))],
-            schema=arrow_schema)
+    # When partitioned, process in larger rounds so each partition gets
+    # ~chunk_size rows (≈ 1 file per partition per round).
+    outer_step = args.chunk_size * max(part_buckets, 1)
+    total_rounds = (n + outer_step - 1) // outer_step
+    print(f"  DEBUG: n={n}, chunk_size={args.chunk_size}, parts={part_buckets}, "
+          f"outer_step={outer_step}, rounds={total_rounds}")
+    t0 = time.time() if "time" in dir() else None
+
+    for round_start in range(0, n, outer_step):
+        round_end = min(round_start + outer_step, n)
+        round_n = round_end - round_start
+
+        chunk = base[round_start:round_end]
+        ids_arr = pa.array(range(round_start + 1, round_end + 1), type=pa.int64())
+        data_buf = pa.py_buffer(chunk.tobytes())
+        vec_arr = pa.FixedSizeBinaryArray.from_buffers(
+            pa.binary(fixed_len), round_n, [None, data_buf])
+        batch = pa.table([ids_arr, vec_arr], schema=arrow_schema)
         tbl.append(batch)
-        total = end
-        if total % 200000 == 0:
-            print(f"  {total}/{n} ...")
-    print(f"  Done: {total} rows")
+
+        total = round_end
+        if total % (args.chunk_size * 10) == 0 or total == n:
+            print(f"  {total:,}/{n:,} ({100*total/n:.0f}%)")
+    print(f"  Done: {total:,} rows")
 
     # 6. Update metadata_location directly — avoid re-register (Rust SDK strips
     #    vector_dim from metadata).  The foreign table keeps its vector(N) type.

@@ -23,7 +23,7 @@ def main():
     p.add_argument("--chunk-size", type=int, default=50000, help="rows per write batch")
     args = p.parse_args()
 
-    warehouse = os.path.expanduser(os.environ.get("ICEBERG_WAREHOUSE", "file://$HOME/warehouse"))
+    warehouse = os.path.expanduser(os.environ.get("ICEBERG_WAREHOUSE", "file:///data/xl/warehouse"))
     if warehouse.startswith("file://"):
         warehouse = warehouse[7:]
 

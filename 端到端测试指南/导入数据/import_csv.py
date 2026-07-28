@@ -7,7 +7,7 @@ CSV → openGauss Iceberg 通用数据管理工具
 用法:
   # 建表
   python3 import_csv.py --op create --csv data.csv -n myns -t mytbl \
-      -c "id:long,name:string,vec:vector(128)" -w ~/warehouse --gsql "gsql -d postgres"
+      -c "id:long,name:string,vec:vector(128)" -w /data/xl/warehouse --gsql "gsql -d postgres"
 
   # 追加
   python3 import_csv.py --op insert --csv more.csv -n myns -t mytbl
@@ -326,7 +326,7 @@ def main():
     p.add_argument("-t", "--table", required=True)
     p.add_argument("-c", "--columns", help="列定义: name:type,... (仅 create 需要；其他操作从 catalog 自动读取)")
     p.add_argument("--key", help="update/delete 的匹配列名")
-    p.add_argument("-w", "--warehouse", default="~/warehouse")
+    p.add_argument("-w", "--warehouse", default="/data/xl/warehouse")
     p.add_argument("--gsql", help="gsql 命令，如 'gsql -d postgres -p 37000'")
     p.add_argument("--no-execute", action="store_true", help="只打印 SQL")
     args = p.parse_args()

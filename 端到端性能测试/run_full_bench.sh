@@ -37,7 +37,7 @@ log "=== GIST Import ==="
 $GSQL -c "DROP FOREIGN TABLE IF EXISTS gist_ns_part.gist1m_part;" 2>/dev/null || true
 $GSQL -c "SELECT iceberg_catalog.drop_table('gist_ns_part','gist1m_part');" 2>/dev/null || true
 $GSQL -c "DELETE FROM iceberg_catalog.tables_internal WHERE namespace='gist_ns_part';" 2>/dev/null || true
-rm -rf ~/warehouse/gist_ns_part 2>/dev/null || true
+rm -rf /data/xl/warehouse/gist_ns_part 2>/dev/null || true
 
 TS=$(date +%s)
 python3 "$SCRIPT_DIR/setup_fixed.py" --input ~/测试文件/gist-960-euclidean.hdf5 --partition-buckets 16

@@ -3,7 +3,7 @@
 Convert SIFT1M .fvecs/.ivecs files into Parquet format for Iceberg.
 
 Usage:
-    python3 convert_sift.py --input ./ --warehouse ~/warehouse --namespace sift_ns --table sift1m
+    python3 convert_sift.py --input ./ --warehouse /data/xl/warehouse --namespace sift_ns --table sift1m
 """
 import argparse
 import os

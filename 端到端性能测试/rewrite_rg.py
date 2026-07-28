@@ -14,7 +14,7 @@ def main():
     p.add_argument("--table-ns", default="gist_ns")
     p.add_argument("--table-name", default="gist1m_rg5k")
     p.add_argument("--row-group-size", type=int, default=5000)
-    p.add_argument("--warehouse", default=os.path.expanduser("~/warehouse"))
+    p.add_argument("--warehouse", default=os.path.expanduser("/data/xl/warehouse"))
     args = p.parse_args()
 
     data_dir = os.path.join(args.warehouse, args.table_ns, args.table_name, "data")

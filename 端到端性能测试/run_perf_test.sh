@@ -6,7 +6,7 @@
 set -euo pipefail
 
 GSQL="gsql -d postgres -p 37000"
-WAREHOUSE=~/warehouse
+WAREHOUSE=/data/xl/warehouse
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPORT="$SCRIPT_DIR/perf_report_$(date +%Y%m%d_%H%M%S).txt"
 

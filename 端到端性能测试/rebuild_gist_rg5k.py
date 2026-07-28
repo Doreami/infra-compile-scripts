@@ -17,7 +17,7 @@ from pyiceberg.catalog.sql import SqlCatalog
 from pyiceberg.schema import Schema
 from pyiceberg.types import LongType, FixedType, NestedField
 
-WAREHOUSE_BASE = os.path.expanduser("~/warehouse")
+WAREHOUSE_BASE = os.path.expanduser("/data/xl/warehouse")
 
 def main():
     p = argparse.ArgumentParser(description="Rebuild GIST1M with configurable row group size")

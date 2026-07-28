@@ -102,9 +102,9 @@ echo "=== Step 7: 存储统计 ==="
 python3 -c "
 import os, glob
 for tbl, label in [('gist1m_zstd','zstd'), ('gist1m_none','none')]:
-    files = glob.glob(f'/home/xl/warehouse/gist_ns/{tbl}/data/*.parquet')
+    files = glob.glob(f'/data/xl/warehouse/gist_ns/{tbl}/data/*.parquet')
     if not files:
-        files = glob.glob(f'/home/xl/warehouse/gist_ns/{tbl}/data/**/*.parquet', recursive=True)
+        files = glob.glob(f'/data/xl/warehouse/gist_ns/{tbl}/data/**/*.parquet', recursive=True)
     sz = sum(os.path.getsize(f) for f in files)
     print(f'{label}: {len(files)} files, {sz/(1024**3):.1f}GB')
     import pyarrow.parquet as pq

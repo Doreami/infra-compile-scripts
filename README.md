@@ -114,7 +114,7 @@ bash build.sh fdw --pull           # 拉最新代码 + 增量编译
 
 ```shell
 # 0. 首先需要配置环境变量
-export ICEBERG_WAREHOUSE=file://$HOME/warehouse
+export ICEBERG_WAREHOUSE=file:///data/xl/warehouse
 
 # 服务器上可能会存在多个opengauss，不建议端口使用默认值5432
 # 1. 初始化数据目录（仅首次）

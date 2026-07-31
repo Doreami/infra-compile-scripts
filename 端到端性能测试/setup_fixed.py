@@ -7,8 +7,8 @@ Partitioned tables group rows by id_bucket before append (1 file/bucket/round).
 
 Usage:
   # Small datasets (SIFT/GIST)
-  python3 setup_fixed.py --input ~/测试文件/gist-960-euclidean.hdf5
-  python3 setup_fixed.py --input ~/测试文件/sift_base.fvecs
+  python3 setup_fixed.py --input ./测试文件/gist-960-euclidean.hdf5
+  python3 setup_fixed.py --input ./测试文件/sift_base.fvecs
 
   # Large fbin datasets
   python3 setup_fixed.py --input ~/big-ann-benchmarks/data/deep1b/base.1B.fbin \
@@ -81,17 +81,21 @@ def main():
                         "Creates partitioned table for parallel query testing.")
     p.add_argument("--num-clusters", type=int, default=256,
                    help="IVFPQ num_clusters for index creation hint (default: 256)")
+    p.add_argument("--vec-type", default="list", choices=["list", "fixed"],
+                   help="Iceberg column type: list<float> or fixed[N] (default: list). "
+                        "Use 'fixed' for high-dim data (>~1000d) where gaussdb maps "
+                        "list<float> to text instead of vector(N).")
     p.add_argument("--compression", default="uncompressed",
                    choices=["zstd", "lz4", "snappy", "gzip", "uncompressed"],
                    help="Parquet compression codec (default: uncompressed). "
                         "No decompression CPU overhead; recommended for vector workloads.")
     args = p.parse_args()
 
-    # Auto-detect format and partition suffix
+    # Auto-detect format。分区表默认加 _part 后缀避免覆盖非分区表，手动指定 --namespace/--table 可覆盖。
     part_buckets = args.partition_buckets
     vec_type = args.vec_type
-    ns_suffix = "_part" if part_buckets > 0 else ""
-    tbl_suffix = "_part" if part_buckets > 0 else ""
+    ns_suffix = "_part" if part_buckets > 0 and args.namespace is None else ""
+    tbl_suffix = "_part" if part_buckets > 0 and args.table is None else ""
 
     fn = os.path.basename(args.input).lower()
     if fn.endswith(".hdf5") or fn.endswith(".h5"):
@@ -141,7 +145,7 @@ def main():
         vec_schema = {"id": 2, "name": "vec", "type": {
             "type": "list", "element": "float",
             "element-id": 100, "element-required": True
-        }, "required": False}
+        }, "required": False, "vector_dim": dim}
     schema_json = json.dumps({
         "type": "struct",
         "schema-id": 0,
@@ -204,7 +208,7 @@ def main():
     resp = json.loads(r.stdout.strip())
     print(f"  Created: {args.namespace}.{args.table}")
 
-    # 3. Verify type & auto-fix
+    # 3. Verify type
     print("\n=== Step 3: Verify column type ===")
     r = subprocess.run([gsql, "-d", "postgres", "-p", "37000", "-t", "-A", "-c",
                         f"SELECT format_type(a.atttypid, a.atttypmod) "
@@ -215,18 +219,17 @@ def main():
                        capture_output=True, text=True, timeout=30)
     col_type = r.stdout.strip()
     print(f"  vec: {col_type}")
-    if col_type != f"vector({dim})":
-        print(f"  ALTER: {col_type or 'empty'} → vector({dim})")
+    need_alter = (col_type != f"vector({dim})")
+    if need_alter:
+        print(f"  ALTER needed: {col_type or 'empty'} → vector({dim})")
         r = subprocess.run([gsql, "-d", "postgres", "-p", "37000", "-c",
                         f"ALTER FOREIGN TABLE {args.namespace}.{args.table} "
                         f"ALTER COLUMN vec TYPE vector({dim});"],
                        capture_output=True, text=True, timeout=15)
         if r.returncode != 0:
             print(f"  ALTER failed: {r.stderr.strip()}")
-            # Try checking what columns exist
-            subprocess.run([gsql, "-d", "postgres", "-p", "37000", "-c",
-                            f"\\d {args.namespace}.{args.table}"],
-                           capture_output=True, timeout=10)
+        else:
+            print(f"  ALTER OK")
 
     # 4. Get metadata path for StaticTable
     md_path = resp.get("metadata_location", "")
@@ -295,8 +298,13 @@ def main():
         else:
             flat = chunk.ravel()
             offsets = np.arange(0, (round_n + 1) * dim, dim, dtype=np.int64)
-            vec_arr = pa.ListArray.from_arrays(
-                pa.array(offsets), pa.array(flat, type=pa.float32()))
+            total_len = offsets[-1]
+            if total_len < 2_147_483_648:  # fits int32
+                vec_arr = pa.ListArray.from_arrays(
+                    pa.array(offsets, type=pa.int32()), pa.array(flat, type=pa.float32()))
+            else:
+                vec_arr = pa.LargeListArray.from_arrays(
+                    pa.array(offsets), pa.array(flat, type=pa.float32()))
         batch = pa.table([ids_arr, vec_arr], schema=arrow_schema)
         tbl.append(batch)
 

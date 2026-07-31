@@ -1,6 +1,9 @@
-# SIFT1M 二进制数据（体积大，从官网单独下载）
-sift_*.fvecs
-sift_*.ivecs
+# 二进制数据集（放在测试文件/下，体积大不上传）
+测试文件/*.fvecs
+测试文件/*.ivecs
+测试文件/*.fbin
+测试文件/*.hdf5
+测试文件/*.bin
 
 # 火焰图原始 perf 数据（二进制）
 flamegraphs/*/perf_data/

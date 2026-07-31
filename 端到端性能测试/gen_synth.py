@@ -77,7 +77,7 @@ def main():
     args = p.parse_args()
 
     if args.out is None:
-        n_label = f"{args.n // 1_000_000}M" if args.n >= 1_000_000 else str(args.n)
+        n_label = f"{args.n // 1_000_000}m" if args.n >= 1_000_000 else str(args.n)
         args.out = f"synth{args.dim}v_{n_label}"
     out_base = os.path.join(os.path.dirname(__file__), f"{args.out}_base.fbin")
     out_query = os.path.join(os.path.dirname(__file__), f"{args.out}_query.fbin")

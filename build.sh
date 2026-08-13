@@ -475,6 +475,18 @@ build_delta() {
     export PATH="$GAUSSHOME/bin:$GCC_HOME/bin:/usr/bin:/bin"
     export LD_LIBRARY_PATH="/usr/lib64:/lib64:$GCC_HOME/lib64:$GCTOOLS/isl/lib:$GCTOOLS/mpc/lib:$GCTOOLS/mpfr/lib:$GCTOOLS/gmp/lib:$GAUSSHOME/lib"
 
+    # 修复 openGauss release 编译的已知问题：
+    #   src/Makefile.global:867 在 enable_debug=no 时把 -pie 写入了 LIBS，
+    #   导致 pg_config --libs 输出包含 -pie。cmake 链接时 -pie 覆盖 -shared，
+    #   强制解析全部 gaussdb 后端符号 → undefined reference。
+    #   此处自动 strip CMakeLists.txt 中 _PG_LIBS 的 -pie（类比已有的 -fPIE strip）。
+    local cmake_patch="$ICEBERG_DELTA_REPO/CMakeLists.txt"
+    if grep -q 'separate_arguments(_PG_LIBS' "$cmake_patch" && \
+       ! grep -q 'REMOVE_ITEM _PG_LIBS -pie' "$cmake_patch"; then
+        info "修补 CMakeLists.txt: strip -pie from _PG_LIBS"
+        sed -i '/^separate_arguments(_PG_LIBS/a list(REMOVE_ITEM _PG_LIBS -pie)' "$cmake_patch"
+    fi
+
     if $configure_needed; then
         ensure_dir "$DELTA_BUILD"
         cd "$DELTA_BUILD"

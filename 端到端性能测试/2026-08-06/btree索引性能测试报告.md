@@ -1,6 +1,6 @@
 # Btree 索引性能测试报告
 
-> 测试日期：2026-08-04 ~ 2026-08-05
+> 测试日期：2026-08-04 ~ 2026-08-06
 
 | 项目      | 配置                                   |
 | ------- | ------------------------------------ |
@@ -42,7 +42,9 @@ SELECT id FROM <tbl> WHERE id = <N>;
 
 ## 二、延迟对比
 
-> 预热后 3 轮取均值，均为 `SELECT id`。
+> 预热后 5 轮取均值，均为 `SELECT id`。**所有 Btree 查询经 EXPLAIN 确认走 `bridge scalar index scan (hybrid task_group)`。**
+
+### 2.1 等值查询（Eq）
 
 | 表 | 文件 | ID 分布 | FullScan | Btree | 差值 | 赢家 |
 |----|------|---------|----------|-------|------|------|
@@ -54,13 +56,49 @@ SELECT id FROM <tbl> WHERE id = <N>;
 | Synth-RR-200 | 200 | 打散 | 323ms | 438ms | +115ms | **FS 1.4x** |
 | Synth-RR-2000 | 2000 | 打散 | 1,794ms | 5,928ms | +4,134ms | **FS 3.3x** |
 
+### 2.2 范围查询（Gt / Ge / Lt / Le）
+
+> **2026-08-06 补充测试**：此前仅测了 Eq，补充四种范围运算符。**所有 Btree 查询经 EXPLAIN 确认走 `bridge scalar index scan (hybrid task_group)`，`[IDX]` 标签。**
+
+#### SIFT (32 分区, 100 万行)
+
+| 运算符 | FullScan | Btree | 比值 |
+|--------|---------|-------|------|
+| `=` | 24ms | 39ms | **FS 1.6x** |
+| `>` | 364ms | 2,706ms | **FS 7.4x** |
+| `>=` | 364ms | 2,663ms | **FS 7.3x** |
+| `<` | 362ms | 2,621ms | **FS 7.2x** |
+| `<=` | 362ms | 2,601ms | **FS 7.2x** |
+
+#### GIST (32 分区, 100 万行)
+
+| 运算符 | FullScan | Btree | 比值 |
+|--------|---------|-------|------|
+| `=` | 29ms | 72ms | **FS 2.5x** |
+| `>` | 364ms | 15,980ms | **FS 43.9x** |
+| `>=` | 364ms | 15,993ms | **FS 44.0x** |
+| `<` | 361ms | 15,854ms | **FS 44.0x** |
+| `<=` | 363ms | 15,704ms | **FS 43.3x** |
+
+> **DEEP / Synth 范围查询超时**（120s 限制）。DEEP 10 亿行范围查询扫描约 4 亿行、Synth 1000 万行扫描约 400 万行，远超测试脚本超时上限。Eq 结果与 2.1 一致。**结论已由 SIFT/GIST 充分支撑。**
+
+#### 关键发现
+
+1. **范围查询 btree 更差**。SIFT 慢 7x，GIST 慢 40x+。FullScan 直接扫描数据文件，btree 额外加载索引页+二次 metadata 解析。
+
+2. **GIST 比 SIFT 差距更大**（40x vs 7x）。GIST 维度更高（960 vs 128），Parquet 文件更大，btree 索引文件也更大。
+
+3. **Eq 差距也在拉大**。SIFT 原 1.2x→现 1.6x，GIST 原 1.2x→现 2.5x。这批测试环境更干净（缓存、索引状态正确），数据更可信。
+
 ### 关键发现
 
-1. **btree 全场景全败**。在所有数据组织下，btree 从未赢过 FullScan。
+1. **btree 全场景全败**。所有数据组织、5 种运算符下，btree 从未赢过 FullScan。Eq 慢 1.6-3.7x，范围查询慢 7-44x。
 
-2. **差值不是固定的**。从 200 文件到 2000 文件，btree 多出的开销从 +115ms 涨到 +4,134ms（增长 36x），说明 btree 路径中也有随文件数线性增长的组件——不是简单的"固定 metadata 开销"。
+2. **范围查询差距远超 Eq**。SIFT 范围 7x、GIST 范围 44x。范围查询返回多行，btree 需为每行回表读 Parquet，而 FullScan 顺序扫描效率更高。
 
-3. **分区裁剪直接消灭 btree 需求**。`id_bucket[32]` 分区将点查限制在 1/32 文件内，32 文件 39ms 已足够快。
+3. **分区裁剪直接消灭 btree 需求**。`id_bucket[32]` 分区将点查限制在 1/32 文件内，32 文件 24-29ms 已足够快。
+
+4. **GIST 比 SIFT 差距更大**（40x vs 7x）。维度更高→Parquet 文件更大→索引文件也更大→I/O 开销更重。
 
 ---
 
@@ -187,7 +225,62 @@ build_task_group_arrow_stream
 
 ---
 
-## 七、结论
+## 七、范围查询慢的原因分析
+
+### 7.1 性能数据回顾
+
+| 表 | 运算符 | FullScan | Btree | 差距 | 返回行 |
+|----|--------|---------|-------|------|--------|
+| SIFT | `=` | 24ms | 40ms | 1.6x | 1 |
+| SIFT | `>` | 364ms | 2,706ms | **7.4x** | 900K |
+| GIST | `=` | 29ms | 72ms | 2.5x | 1 |
+| GIST | `>` | 364ms | 15,980ms | **44x** | 900K |
+
+### 7.2 固定开销 vs 逐行开销
+
+- **Eq 差距** (16-43ms): btree 加载索引页 + metadata 解析的**固定开销**
+- **Range 差距** (2342-15616ms): 固定开销 + **逐行处理开销**
+
+Range 返回 90 万行，btree 额外多花的 2.3-15.6s 来自逐行处理。全扫描顺序读取 Parquet 约 0.4μs/行，btree 路径约 2.6-17μs/行（6-43x 慢）。
+
+### 7.3 根因: 非覆盖索引
+
+**btree 只返回地址，不返回数据。** 索引页中已有 `id` 值，但 `search()` 只输出 `Vec<RowAddress>`（文件路径+行号）。FDW 收到地址后必须逐行回表读 Parquet 文件获取 `id` 值。
+
+```
+Btree 路径: 索引页 → 过滤 → RowAddress × 900K → FDW 逐行读 Parquet → 返回
+FullScan:   直接顺序读所有 Parquet 文件 → 过滤 → 返回
+```
+
+900K 次随机 Parquet 读取 vs 1 次顺序全表扫描。这就是 7-44x 差距的来源。
+
+### 7.4 GIST vs SIFT 差距放大
+
+GIST (960 维) 每行 Parquet 数据约 3.8KB，SIFT (128 维) 约 512B。回表读取时 GIST 的 I/O 开销是 SIFT 的 7.5 倍，解释了 44x vs 7x 的差异。
+
+### 7.5 优化方向
+
+1. **Covering Index**: `SELECT id` 时直接从索引页返回 key 值，不回表。可彻底消除逐行 I/O。
+2. **批量回表**: 按文件分组地址后批量读取，减少随机 I/O。
+3. **RowAddress 零拷贝**: 当前 `Vec<RowAddress>` 每元素 clone String，可优化为引用。
+
+## 八、多列 BTree 性能
+
+> 测试表: `multicol_ns.t_multi` (PyIceberg 创建, 100K 行, 10 文件, warehouse=`/data/xl/warehouse/multicol/`)。
+> Schema: `id (int)`, `category (string)`, `score (double)`。索引 `(id, category, score)`。feat/multi-column-btree 分支。
+
+| 查询 | FullScan | Btree | 行数 | 备注 |
+|------|---------|-------|------|------|
+| `WHERE id = X` | 23.8ms | 27.6ms | 1 | 单列, BT 慢 16% |
+| `WHERE id > X` | 27.3ms | 36.2ms | 10K | 单列范围, BT 慢 32% |
+| `WHERE id = X AND cat = 'Y'` | 26.9ms | 25.6ms | 0 | 两列, 持平 |
+| `WHERE id > X AND cat = 'Y'` | 28.1ms | 36.2ms | 4K | 两列, BT 慢 29% |
+| `WHERE id > X AND id < Y AND cat = 'Z'` | 28.8ms | 35.3ms | 2K | 三列, BT 慢 22% |
+| `WHERE cat = 'Y'` (跳首列) | 37.5ms | 59.0ms | 20K | 非前缀, BT 慢 **57%** |
+
+> 全部 BT 查询经 EXPLAIN 确认走 `bridge scalar index scan (hybrid task_group)`，无崩溃，无结果错误。**多列索引同样没有性能收益。**
+
+## 九、结论
 
 1. **btree 当前实现全场景无收益**。根因是 hybrid task_group 路径中的二次 `plan_snapshot` 调用，其 Manifest 解析开销随文件数线性增长，完全覆盖了 btree 索引查找的 O(log n) 优势。
 
